@@ -1,0 +1,18 @@
+# 环境变量
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# IDE
+.idea/
+
+# 数据文件（按需取消注释）
+/chroma_data/
+
