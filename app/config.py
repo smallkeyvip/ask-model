@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     RERANK_TOP_K: int = 5
     MAX_CONTEXT_TOKENS: int = 3000
 
+    # ── 输入预处理 ────────────────────────────────────────────────────
+    ENABLE_INPUT_PREPROCESS: bool = True    # 是否启用输入预处理（敏感词+业务判断+指代消解）
+    SENSITIVE_KEYWORDS_EXTRA_FILE: str = "/Users/enmonster/PycharmProjects/ask-model/sensitive_words_extra.json" # 额外敏感配置 JSON 文件路径（可选，统一格式含 keywords/lists/rules）
+    BUSINESS_DOMAIN_KEYWORDS: str = ""      # 业务领域关键词（逗号分隔，留空使用内置默认）
+
     # ── 服务 ────────────────────────────────────────────────────────
     HOST: str = "0.0.0.0"
     PORT: int = 8010

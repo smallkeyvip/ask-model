@@ -9,6 +9,7 @@ import uuid
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 from app.config import get_settings
+from app.input_preprocessor import InputPreprocessor, PreprocessResult
 from app.memory.memory_manager import MemoryManager
 from app.query_rewrite import QueryRewriter
 from app.retriever.hybrid_retriever import HybridRetriever
@@ -47,6 +48,9 @@ class RAGPipeline:
         self.prompt_builder = PromptBuilder()
         self.llm = LLMClient()
         self.postprocessor = PostProcessor()
+        self.preprocessor = InputPreprocessor(
+            business_keywords=s.BUSINESS_DOMAIN_KEYWORDS or None,
+        )
 
         # 会话级记忆管理（按 session_id 隔离）
         # value = (MemoryManager, last_access_timestamp)
@@ -153,6 +157,21 @@ class RAGPipeline:
         start_time = time.time()
         memory = self.get_memory(session_id)
 
+        # ★ 输入预处理（敏感词过滤 + 业务相关性判断 + 指代消解）
+        if settings().ENABLE_INPUT_PREPROCESS:
+            pre_result = await self.preprocessor.preprocess(
+                query,
+                history_messages=memory.short_term.get_window_as_messages(),
+            )
+            if pre_result.blocked:
+                return {
+                    "answer": pre_result.reason,
+                    "sources": [],
+                    "session_id": session_id,
+                    "trace": {"blocked": True, "reason": pre_result.reason},
+                }
+            query = pre_result.processed_query
+
         # Step 1: 记录用户输入
         memory.record_user(query)
 
@@ -218,6 +237,25 @@ class RAGPipeline:
         start_time = time.time()
         memory = self.get_memory(session_id)
         full_answer = ""
+
+        # ★ 输入预处理（敏感词过滤 + 业务相关性判断 + 指代消解）
+        if settings().ENABLE_INPUT_PREPROCESS:
+            pre_result = await self.preprocessor.preprocess(
+                query,
+                history_messages=memory.short_term.get_window_as_messages(),
+            )
+            if pre_result.blocked:
+                yield {"type": "error", "data": pre_result.reason}
+                yield {
+                    "type": "done",
+                    "data": {
+                        "sources": [],
+                        "session_id": session_id,
+                        "trace": {"blocked": True, "reason": pre_result.reason},
+                    },
+                }
+                return
+            query = pre_result.processed_query
 
         try:
             # Step 1~6: 与非流式相同

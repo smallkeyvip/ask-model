@@ -1,0 +1,99 @@
+{
+  "keywords": {
+    "political": [
+      "分裂","独立"
+    ],
+    "violence": [
+      "额外暴力敏感词"
+    ],
+    "pornographic": [
+      "额外色情敏感词"
+    ],
+    "illegal": [
+      "额外违法敏感词"
+    ]
+  },
+  "lists": {
+    "political_persons": [
+      "敏感政治人物姓名1",
+      "习近平", "胡锦涛"
+    ],
+    "political_activities": [
+      "敏感政治活动名称1",
+      "游行", "示威"
+    ],
+    "political_activity_intents": [
+      "支持",
+      "宣传",
+      "纪念",
+      "悼念",
+      "声援",
+      "组织",
+      "参与",
+      "传播",
+      "加入",
+      "发起",
+      "推动",
+      "煽动",
+      "动员",
+      "串联",
+      "怎么",
+      "如何",
+      "怎样",
+      "办法",
+      "方法",
+      "教程",
+      "攻略",
+      "步骤"
+    ]
+  },
+  "rules": {
+    "political": [
+      {
+        "name": "custom_political_action_target",
+        "type": "action_target",
+        "actions": [
+          "组织",
+          "传播",
+          "参与",
+          "推动"
+        ],
+        "targets": [
+          "敏感政治活动名称1",
+          "敏感政治活动名称2"
+        ]
+      }
+    ],
+    "violence": [
+      {
+        "name": "custom_violence_action_target",
+        "type": "action_target",
+        "actions": [
+          "制作",
+          "制造",
+          "购买",
+          "使用"
+        ],
+        "targets": [
+          "额外暴力敏感目标"
+        ]
+      }
+    ],
+    "illegal": [
+      {
+        "name": "custom_illegal_action_target",
+        "type": "action_target",
+        "actions": [
+          "购买",
+          "售卖",
+          "贩卖",
+          "制作",
+          "运输"
+        ],
+        "targets": [
+          "额外违法敏感目标"
+        ]
+      }
+    ]
+  }
+}
