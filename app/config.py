@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     CHROMA_COLLECTION: str = "enterprise_knowledge"
 
     # ── Embedding ───────────────────────────────────────────────────
-    EMBEDDING_MODEL: str = "/Users/enmonster/ai/model/shibing624-text2vec-base-chinese"
+    EMBEDDING_MODEL: str = "shibing624/text2vec-base-chinese"
+    EMBEDDING_LOCAL_FILES_ONLY: bool = False
 
     # ── 记忆层参数 ──────────────────────────────────────────────────
     SHORT_TERM_WINDOW_SIZE: int = 6          # 短期窗口保留最近 N 轮
@@ -46,12 +47,33 @@ class Settings(BaseSettings):
 
     # ── 输入预处理 ────────────────────────────────────────────────────
     ENABLE_INPUT_PREPROCESS: bool = True    # 是否启用输入预处理（敏感词+业务判断+指代消解）
-    SENSITIVE_KEYWORDS_EXTRA_FILE: str = "/Users/enmonster/PycharmProjects/ask-model/sensitive_words_extra.json" # 额外敏感配置 JSON 文件路径（可选，统一格式含 keywords/lists/rules）
+    SENSITIVE_KEYWORDS_EXTRA_FILE: str = "./sensitive_words_extra.json"
     BUSINESS_DOMAIN_KEYWORDS: str = ""      # 业务领域关键词（逗号分隔，留空使用内置默认）
+
+    # ── 认证与授权 ─────────────────────────────────────────────────────
+    AUTH_DB_PATH: str = "./data/auth.db"
+    AUTH_COOKIE_NAME: str = "ask_model_session"
+    AUTH_SESSION_TTL_SECONDS: int = 604800
+    INVITATION_TTL_SECONDS: int = 604800
+    AUTH_COOKIE_SECURE: bool = False
+    BOOTSTRAP_ADMIN_EMAIL: str = ""
+    BOOTSTRAP_ADMIN_PASSWORD: str = ""
+
+    # ── API 安全边界 ──────────────────────────────────────────────────
+    ALLOWED_ORIGINS: str = "http://localhost:8010,http://127.0.0.1:8010"
+    MAX_ACTIVE_CHAT_SESSIONS: int = 20
+    MAX_UPLOAD_DOCUMENTS: int = 20
+    MAX_UPLOAD_CHARS_PER_DOCUMENT: int = 100000
+    DOCUMENT_CHUNK_SIZE: int = 1200
+    DOCUMENT_CHUNK_OVERLAP: int = 150
 
     # ── 服务 ────────────────────────────────────────────────────────
     HOST: str = "0.0.0.0"
     PORT: int = 8010
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
 
 @lru_cache

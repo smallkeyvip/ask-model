@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>ASK 企业知识</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <main id="auth-view" class="auth-view">
+    <section class="auth-brand" aria-label="ASK 企业知识">
+      <div class="brand-lockup brand-lockup--large">
+        <span class="brand-mark">A</span>
+        <div><strong>ASK</strong><span>企业知识工作台</span></div>
+      </div>
+      <div class="auth-brand-copy">
+        <p class="eyebrow">ENTERPRISE KNOWLEDGE</p>
+        <h1>让团队答案<br>回到事实。</h1>
+        <p>业务规则、企业文档与历史结论，在受控空间中完成检索与问答。</p>
+      </div>
+      <div class="auth-brand-foot">INVITE ONLY / 受邀成员专用</div>
+    </section>
+
+    <section class="auth-panel">
+      <form id="login-form" class="auth-form">
+        <header class="form-heading"><p class="eyebrow">01 / SIGN IN</p><h2>进入知识工作台</h2></header>
+        <label class="field"><span>工作邮箱</span><input id="login-email" type="email" autocomplete="email" required></label>
+        <label class="field"><span>密码</span><input id="login-password" type="password" autocomplete="current-password" maxlength="128" required></label>
+        <p id="login-error" class="form-error" role="alert"></p>
+        <button class="button button--primary button--wide" type="submit">登录</button>
+      </form>
+
+      <form id="invite-form" class="auth-form hidden">
+        <header class="form-heading"><p class="eyebrow">01 / ACTIVATE</p><h2>激活受邀账号</h2></header>
+        <label class="field"><span>姓名</span><input id="invite-name" type="text" autocomplete="name" maxlength="80" required></label>
+        <label class="field"><span>设置密码</span><input id="invite-password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
+        <label class="field"><span>确认密码</span><input id="invite-password-confirm" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></label>
+        <p id="invite-error" class="form-error" role="alert"></p>
+        <button class="button button--primary button--wide" type="submit">激活并进入</button>
+      </form>
+    </section>
+  </main>
+
+  <div id="app-view" class="app-view hidden">
+    <div id="sidebar-scrim" class="sidebar-scrim hidden"></div>
+    <aside id="sidebar" class="sidebar">
+      <header class="sidebar-top">
+        <div class="brand-lockup"><span class="brand-mark">A</span><div><strong>ASK</strong><span>企业知识</span></div></div>
+        <button id="sidebar-close" class="icon-button mobile-only" type="button" aria-label="关闭导航">×</button>
+      </header>
+
+      <nav class="primary-nav" aria-label="主导航">
+        <button id="nav-chat" class="nav-button active" type="button"><span>企业问答</span><kbd>Q</kbd></button>
+        <button id="nav-admin" class="nav-button hidden" type="button"><span>系统管理</span><kbd>A</kbd></button>
+      </nav>
+
+      <div class="session-heading"><span>最近对话</span><button id="new-session" class="icon-button" type="button" title="新对话" aria-label="新对话">＋</button></div>
+      <div id="session-list" class="session-list"></div>
+
+      <footer class="profile-block">
+        <div id="profile-avatar" class="avatar">U</div>
+        <div class="profile-copy"><strong id="profile-name"></strong><span id="profile-role"></span></div>
+        <button id="logout-button" class="icon-button" type="button" title="退出登录" aria-label="退出登录">↪</button>
+      </footer>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <button id="sidebar-open" class="icon-button mobile-only" type="button" aria-label="打开导航">☰</button>
+        <div><p id="view-eyebrow" class="eyebrow">KNOWLEDGE DESK</p><h1 id="view-title">企业问答</h1></div>
+        <div class="service-state"><span class="state-dot"></span><span>服务就绪</span></div>
+      </header>
+
+      <section id="chat-view" class="chat-view">
+        <div id="message-list" class="message-list" aria-live="polite">
+          <div id="empty-chat" class="empty-chat">
+            <div class="empty-mark">A</div>
+            <h2>从企业知识开始</h2>
+            <div class="suggestion-row">
+              <button type="button" data-question="返还单的处理规则是什么？">返还单规则</button>
+              <button type="button" data-question="设备状态如何查询？">设备状态</button>
+              <button type="button" data-question="退赔申请需要哪些材料？">退赔流程</button>
+            </div>
+          </div>
+        </div>
+        <footer class="composer-wrap">
+          <div id="chat-status" class="chat-status"></div>
+          <form id="chat-form" class="composer">
+            <textarea id="chat-input" rows="1" maxlength="2000" placeholder="输入业务问题" required></textarea>
+            <button id="send-button" class="send-button" type="submit">发送</button>
+          </form>
+        </footer>
+      </section>
+
+      <section id="admin-view" class="admin-view hidden">
+        <nav class="admin-tabs" aria-label="管理功能">
+          <button class="admin-tab active" data-admin-tab="invite" type="button">成员邀请</button>
+          <button class="admin-tab" data-admin-tab="documents" type="button">文档入库</button>
+          <button class="admin-tab" data-admin-tab="users" type="button">成员管理</button>
+        </nav>
+
+        <section id="admin-invite" class="admin-panel">
+          <header class="panel-heading"><div><p class="eyebrow">01 / INVITATIONS</p><h2>邀请新成员</h2></div></header>
+          <form id="create-invite-form" class="inline-form">
+            <label class="field field--grow"><span>工作邮箱</span><input id="admin-invite-email" type="email" placeholder="name@company.com" required></label>
+            <label class="field"><span>角色</span><select id="admin-invite-role"><option value="user">成员</option><option value="admin">管理员</option></select></label>
+            <button class="button button--primary" type="submit">生成邀请</button>
+          </form>
+          <div id="invite-result" class="invite-result hidden"><input id="invite-url" type="text" readonly aria-label="邀请链接"><button id="copy-invite" class="button button--secondary" type="button">复制</button></div>
+          <div class="data-section"><h3>邀请记录</h3><div id="invitation-table" class="data-table"></div></div>
+        </section>
+
+        <section id="admin-documents" class="admin-panel hidden">
+          <header class="panel-heading"><div><p class="eyebrow">02 / KNOWLEDGE</p><h2>文档入库</h2></div><span id="document-total" class="metric">0 条</span></header>
+          <form id="upload-form" class="upload-form">
+            <label class="field"><span>来源名称</span><input id="upload-source" type="text" maxlength="120" value="管理员上传" required></label>
+            <label class="file-drop" for="upload-files"><input id="upload-files" type="file" accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json" multiple><strong>选择文档</strong><span id="file-summary">TXT / MD / CSV / JSON</span></label>
+            <label class="field"><span>补充文本</span><textarea id="upload-text" rows="6" maxlength="100000" placeholder="也可以直接粘贴文档内容"></textarea></label>
+            <p id="upload-error" class="form-error" role="alert"></p>
+            <button class="button button--primary" type="submit">写入知识库</button>
+          </form>
+        </section>
+
+        <section id="admin-users" class="admin-panel hidden">
+          <header class="panel-heading"><div><p class="eyebrow">03 / MEMBERS</p><h2>成员管理</h2></div></header>
+          <div id="user-table" class="data-table"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

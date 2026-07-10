@@ -28,9 +28,17 @@ class LongTermMemory:
     - 支持增量更新（同一实体覆盖旧记录）
     """
 
-    def __init__(self, persist_dir: Optional[str] = None, top_k: int = 5):
+    def __init__(
+        self,
+        persist_dir: Optional[str] = None,
+        top_k: int = 5,
+        user_id: str = "",
+        session_id: str = "",
+    ):
         s = settings()
         self.top_k = top_k
+        self.user_id = user_id
+        self.session_id = session_id
         self._client = chromadb.PersistentClient(
             path=persist_dir or s.CHROMA_PERSIST_DIR,
             settings=ChromaSettings(anonymized_telemetry=False),
@@ -41,7 +49,7 @@ class LongTermMemory:
         )
         logger.info(
             f"[长期记忆] Chroma collection '{LONG_TERM_COLLECTION}' 已加载，"
-            f"当前记录数: {self._collection.count()}"
+            f"当前用户记录数: {self.count}"
         )
 
     # ── 写入 ─────────────────────────────────────────────────────────
@@ -62,7 +70,8 @@ class LongTermMemory:
         doc_id = str(uuid.uuid4())
         metadata = {
             "category": category,
-            "session_id": session_id,
+            "user_id": self.user_id,
+            "session_id": session_id or self.session_id,
             "entities": ",".join(entities or []),
             "timestamp": time.time(),
         }
@@ -89,7 +98,8 @@ class LongTermMemory:
         metadatas = [
             {
                 "category": it.get("category", "general"),
-                "session_id": session_id,
+                "user_id": self.user_id,
+                "session_id": session_id or self.session_id,
                 "entities": ",".join(it.get("entities", [])),
                 "timestamp": time.time(),
             }
@@ -103,11 +113,13 @@ class LongTermMemory:
     def recall(self, query: str, top_k: Optional[int] = None) -> List[dict]:
         """语义召回与 query 最相关的历史记忆"""
         k = top_k or self.top_k
-        if self._collection.count() == 0:
+        owner_count = self.count
+        if owner_count == 0:
             return []
         results = self._collection.query(
             query_texts=[query],
-            n_results=min(k, self._collection.count()),
+            n_results=min(k, owner_count),
+            where=self._owner_filter(),
         )
         return self._format_results(results)
 
@@ -116,14 +128,36 @@ class LongTermMemory:
     ) -> List[dict]:
         """按类别过滤后语义召回"""
         k = top_k or self.top_k
-        if self._collection.count() == 0:
+        owner_count = self.count
+        if owner_count == 0:
             return []
         results = self._collection.query(
             query_texts=[query],
-            n_results=min(k, self._collection.count()),
-            where={"category": category},
+            n_results=min(k, owner_count),
+            where={
+                "$and": [
+                    self._owner_filter(),
+                    {"category": category},
+                ]
+            },
         )
         return self._format_results(results)
+
+    def _owner_filter(self) -> dict:
+        return {
+            "user_id": self.user_id,
+        }
+
+    def clear_session(self, session_id: Optional[str] = None) -> None:
+        """删除当前所有者指定会话的持久记忆。"""
+        self._collection.delete(
+            where={
+                "$and": [
+                    self._owner_filter(),
+                    {"session_id": session_id or self.session_id},
+                ]
+            }
+        )
 
     # ── 工具方法 ─────────────────────────────────────────────────────
     @staticmethod
@@ -143,11 +177,12 @@ class LongTermMemory:
 
     @property
     def count(self) -> int:
-        return self._collection.count()
+        records = self._collection.get(
+            where=self._owner_filter(),
+            include=["metadatas"],
+        )
+        return len(records.get("ids", []))
 
     def clear(self) -> None:
-        self._client.delete_collection(LONG_TERM_COLLECTION)
-        self._collection = self._client.get_or_create_collection(
-            name=LONG_TERM_COLLECTION,
-            metadata={"hnsw:space": "cosine"},
-        )
+        """删除当前用户的全部长期记忆，不影响其他成员。"""
+        self._collection.delete(where=self._owner_filter())

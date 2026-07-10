@@ -7,9 +7,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-import httpx
-
 from app.config import get_settings
+from app.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 settings = get_settings
@@ -37,9 +36,14 @@ class MidTermMemory:
     摘要结果保存在内存列表中，构建 Prompt 时拼入上下文。
     """
 
-    def __init__(self, max_summary_tokens: int = 500):
+    def __init__(
+        self,
+        max_summary_tokens: int = 500,
+        llm_client: Optional[LLMClient] = None,
+    ):
         self.max_summary_tokens = max_summary_tokens
         self._summaries: List[Summary] = []
+        self._llm = llm_client or LLMClient()
 
     async def compress_turns(self, turns, start_idx: int) -> Optional[Summary]:
         """对溢出的 turns 生成摘要，存入 self._summaries"""
@@ -68,27 +72,15 @@ class MidTermMemory:
 
     async def _call_llm(self, system_prompt: str, user_msg: str) -> str:
         """调用 DeepSeek 生成摘要"""
-        s = settings()
-        async with httpx.AsyncClient(timeout=60, trust_env=True) as client:
-            resp = await client.post(
-                s.DEEPSEEK_API_URL,
-                headers={
-                    "Authorization": f"Bearer {s.DEEPSEEK_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": s.DEEPSEEK_MODEL,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": self.max_summary_tokens,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
+        return await self._llm.chat(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.3,
+            max_tokens=self.max_summary_tokens,
+            timeout=60,
+        )
 
     def get_summaries_text(self) -> str:
         """拼接所有摘要，供 Prompt 使用"""

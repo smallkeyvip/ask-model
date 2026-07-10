@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import asyncio
 from typing import AsyncGenerator, List
 
 import httpx
@@ -26,6 +27,11 @@ class BailianRetriever:
         self.api_url = s.BAILIAN_API_URL
         self.api_key = s.BAILIAN_API_KEY
         self.agent_id = s.BAILIAN_AGENT_ID
+        self._client = httpx.AsyncClient(timeout=30, trust_env=True)
+
+    async def aclose(self) -> None:
+        if not self._client.is_closed:
+            await self._client.aclose()
 
     async def retrieve(self, query: str) -> List[dict]:
         """
@@ -42,9 +48,9 @@ class BailianRetriever:
             "stream": True,
         }
 
-        try:
-            async with httpx.AsyncClient(timeout=30, trust_env=True) as client:
-                async with client.stream(
+        for attempt in range(2):
+            try:
+                async with self._client.stream(
                     "POST",
                     self.api_url,
                     headers={
@@ -52,9 +58,16 @@ class BailianRetriever:
                         "Content-Type": "application/json",
                     },
                     json=payload,
+                    timeout=30,
                 ) as resp:
                     if resp.status_code != 200:
                         body = await resp.aread()
+                        if resp.status_code >= 500:
+                            raise httpx.HTTPStatusError(
+                                f"Bailian server error: {resp.status_code}",
+                                request=resp.request,
+                                response=resp,
+                            )
                         logger.error(
                             f"[百炼检索] HTTP {resp.status_code}: {body.decode()[:500]}"
                         )
@@ -74,9 +87,12 @@ class BailianRetriever:
 
                     # 从所有事件中提取包含知识库结果的事件
                     return self._parse_response(all_events)
-        except Exception as e:
-            logger.error(f"[百炼检索] 请求失败: {e}")
-            return []
+            except Exception as e:
+                if attempt == 0:
+                    await asyncio.sleep(0.25)
+                    continue
+                logger.error(f"[百炼检索] 请求失败: {e}")
+        return []
 
     async def retrieve_stream(self, query: str) -> AsyncGenerator[str, None]:
         """流式调用百炼知识库，逐步返回内容"""
@@ -91,8 +107,7 @@ class BailianRetriever:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=60, trust_env=True) as client:
-                async with client.stream(
+            async with self._client.stream(
                     "POST",
                     self.api_url,
                     headers={
@@ -100,6 +115,7 @@ class BailianRetriever:
                         "Content-Type": "application/json",
                     },
                     json=payload,
+                    timeout=60,
                 ) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
@@ -129,32 +145,26 @@ class BailianRetriever:
 
                 # 提取 tool 角色的知识库检索结果
                 if role == "tool" and content:
-                    results.append({
-                        "content": content,
-                        "source": "百炼知识库",
-                        "score": 1.0,
-                        "origin": "bailian",
-                    })
-
-                    # 提取详细文档引用
                     extra = msg.get("additional_kwargs", {}).get("extra_json", {})
-                    docs = extra.get("docs", [])
+                    docs = extra.get("docs", []) if isinstance(extra, dict) else []
                     for doc in docs:
+                        try:
+                            score = float(doc.get("_score", 0.8))
+                        except (TypeError, ValueError):
+                            score = 0.8
                         results.append({
                             "content": doc.get("content", ""),
                             "source": doc.get("doc_name", doc.get("title", "百炼知识库")),
-                            "score": float(doc.get("_score", 0.8)),
+                            "score": score,
                             "origin": "bailian",
                             "doc_url": doc.get("doc_url", ""),
                         })
-
-                # 提取 assistant 角色的最终回答
-                elif role == "assistant" and content and content.strip() != "用户":
-                    results.append({
-                        "content": content,
-                        "source": "百炼知识库",
-                        "score": 1.0,
-                        "origin": "bailian",
-                    })
+                    if not docs:
+                        results.append({
+                            "content": content,
+                            "source": "百炼知识库",
+                            "score": 0.7,
+                            "origin": "bailian",
+                        })
 
         return results

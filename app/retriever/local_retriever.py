@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import List, Optional
 
 import chromadb
@@ -49,7 +48,7 @@ class LocalRetriever:
                 model_name=s.EMBEDDING_MODEL,
                 model_kwargs={
                     "device": "cpu",
-                    "local_files_only": True,
+                    "local_files_only": s.EMBEDDING_LOCAL_FILES_ONLY,
                 },
                 encode_kwargs={"normalize_embeddings": True},
             )
@@ -98,25 +97,39 @@ class LocalRetriever:
 
     def search_multi(self, queries: List[str], top_k: int = 10) -> List[dict]:
         """多 query 检索并去重合并"""
-        seen_contents = set()
-        merged = []
-        for q in queries:
-            hits = self.search(q, top_k=top_k)
+        if not queries or self._collection.count() == 0:
+            return []
+        embed_fn = self._get_embedding_fn()
+        query_embeddings = embed_fn.embed_documents(queries)
+        results = self._collection.query(
+            query_embeddings=query_embeddings,
+            n_results=min(top_k, self._collection.count()),
+        )
+        best_by_content = {}
+        for query_index in range(len(queries)):
+            hits = self._format_results(results, query_index)
             for hit in hits:
                 key = hit["content"][:100]  # 简单去重
-                if key not in seen_contents:
-                    seen_contents.add(key)
-                    merged.append(hit)
+                previous = best_by_content.get(key)
+                if previous is None or hit.get("score", 0) > previous.get("score", 0):
+                    best_by_content[key] = hit
+        merged = sorted(
+            best_by_content.values(),
+            key=lambda hit: hit.get("score", 0),
+            reverse=True,
+        )
         return merged[:top_k]
 
     @staticmethod
-    def _format_results(results) -> List[dict]:
+    def _format_results(results, query_index: int = 0) -> List[dict]:
         formatted = []
         if not results or not results["documents"]:
             return formatted
-        for i, doc in enumerate(results["documents"][0]):
-            meta = results["metadatas"][0][i] if results["metadatas"] else {}
-            dist = results["distances"][0][i] if results["distances"] else 0
+        if query_index >= len(results["documents"]):
+            return formatted
+        for i, doc in enumerate(results["documents"][query_index]):
+            meta = results["metadatas"][query_index][i] if results["metadatas"] else {}
+            dist = results["distances"][query_index][i] if results["distances"] else 0
             formatted.append({
                 "content": doc,
                 "source": meta.get("source", "本地知识库"),

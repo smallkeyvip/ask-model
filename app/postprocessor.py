@@ -5,15 +5,13 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List
+from typing import List, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 # 默认敏感词列表（生产环境应从配置/数据库加载）
-DEFAULT_SENSITIVE_WORDS = [
-    "密码", "password", "secret_key", "api_key", "token",
-    "银行卡号", "身份证号", "手机号", "手机号"
-]
+DEFAULT_SENSITIVE_WORDS: List[str] = []
 
 
 class PostProcessor:
@@ -24,8 +22,8 @@ class PostProcessor:
     3. 敏感词过滤：脱敏处理敏感信息
     """
 
-    def __init__(self, sensitive_words: List[str] = None):
-        self.sensitive_words = sensitive_words or DEFAULT_SENSITIVE_WORDS
+    def __init__(self, sensitive_words: Optional[List[str]] = None):
+        self.sensitive_words = sensitive_words if sensitive_words is not None else DEFAULT_SENSITIVE_WORDS
 
     def process(self, text: str, sources: List[dict]) -> dict:
         """
@@ -56,8 +54,37 @@ class PostProcessor:
         }
 
     def _filter_sensitive(self, text: str) -> tuple[str, List[str]]:
-        """敏感词脱敏"""
+        """对常见凭证和个人数据值进行确定性脱敏。"""
         filtered = []
+        value_patterns = [
+            (
+                "credential",
+                re.compile(
+                    r"(?i)\b(api[_-]?key|access[_-]?token|secret[_-]?key|password)\b(\s*[:=]\s*)([^\s,;]{8,})"
+                ),
+                lambda match: f"{match.group(1)}{match.group(2)}***",
+            ),
+            (
+                "phone",
+                re.compile(r"(?<!\d)(1[3-9]\d)\d{4}(\d{4})(?!\d)"),
+                lambda match: f"{match.group(1)}****{match.group(2)}",
+            ),
+            (
+                "id_number",
+                re.compile(r"(?<!\d)(\d{6})\d{8}([\dXx]{4})(?!\d)"),
+                lambda match: f"{match.group(1)}********{match.group(2)}",
+            ),
+            (
+                "bank_card",
+                re.compile(r"(?<!\d)(\d{4})\d{8,11}(\d{4})(?!\d)"),
+                lambda match: f"{match.group(1)}********{match.group(2)}",
+            ),
+        ]
+        for label, pattern, replacement in value_patterns:
+            text, count = pattern.subn(replacement, text)
+            if count:
+                filtered.append(label)
+
         for word in self.sensitive_words:
             if word.lower() in text.lower():
                 filtered.append(word)
@@ -86,10 +113,12 @@ class PostProcessor:
         # 构建引用来源列表
         for idx in sorted(cited_indices):
             source = sources[idx]
+            url = self._safe_source_url(source.get("doc_url", ""))
             cited.append({
                 "index": idx + 1,
                 "source": source.get("source", "知识库"),
                 "origin": source.get("origin", "unknown"),
+                "url": url,
             })
 
         # 如果 LLM 没有主动引用，但提供了来源，追加来源列表
@@ -100,11 +129,23 @@ class PostProcessor:
                 source_list.append(f"[来源{i}] {src_name}")
             text += "\n\n---\n**参考来源：**\n" + "\n".join(source_list)
             cited = [
-                {"index": i + 1, "source": s.get("source", ""), "origin": s.get("origin", "")}
+                {
+                    "index": i + 1,
+                    "source": s.get("source", ""),
+                    "origin": s.get("origin", ""),
+                    "url": self._safe_source_url(s.get("doc_url", "")),
+                }
                 for i, s in enumerate(sources)
             ]
 
         return text, cited
+
+    @staticmethod
+    def _safe_source_url(value: str) -> str:
+        if not isinstance(value, str):
+            return ""
+        parsed = urlparse(value)
+        return value if parsed.scheme in {"http", "https"} and parsed.netloc else ""
 
     @staticmethod
     def _format_text(text: str) -> str:

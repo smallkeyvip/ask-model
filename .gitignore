@@ -13,6 +13,6 @@ build/
 # IDE
 .idea/
 
-# 数据文件（按需取消注释）
+# 运行时持久化数据
 /chroma_data/
-
+/data/

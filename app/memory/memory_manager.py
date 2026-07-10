@@ -3,7 +3,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from typing import List, Optional
@@ -12,6 +11,7 @@ from app.config import get_settings
 from app.memory.short_term import ShortTermMemory
 from app.memory.mid_term import MidTermMemory
 from app.memory.long_term import LongTermMemory
+from app.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 settings = get_settings
@@ -25,12 +25,25 @@ class MemoryManager:
     3. 长期（向量）：提取关键实体/结论存入 Chroma，跨会话召回
     """
 
-    def __init__(self, session_id: str = "default"):
+    def __init__(
+        self,
+        session_id: str = "default",
+        user_id: str = "",
+        llm_client: Optional[LLMClient] = None,
+    ):
         s = settings()
         self.session_id = session_id
+        self.user_id = user_id
         self.short_term = ShortTermMemory(window_size=s.SHORT_TERM_WINDOW_SIZE)
-        self.mid_term = MidTermMemory(max_summary_tokens=s.MID_TERM_MAX_SUMMARY_TOKENS)
-        self.long_term = LongTermMemory(top_k=s.LONG_TERM_TOP_K)
+        self.mid_term = MidTermMemory(
+            max_summary_tokens=s.MID_TERM_MAX_SUMMARY_TOKENS,
+            llm_client=llm_client,
+        )
+        self.long_term = LongTermMemory(
+            top_k=s.LONG_TERM_TOP_K,
+            user_id=user_id,
+            session_id=session_id,
+        )
         self._turn_counter = 0
 
     # ── 记录一轮问答 ─────────────────────────────────────────────────
@@ -43,6 +56,18 @@ class MemoryManager:
         self._turn_counter += 1
 
         # 异步执行：溢出压缩 + 长期记忆提取（不阻塞响应）
+        await self._handle_overflow()
+
+    async def record_exchange(
+        self,
+        query: str,
+        answer: str,
+        sources: Optional[List[dict]] = None,
+    ) -> None:
+        """成功完成回答后原子地追加一轮完整对话。"""
+        self.short_term.add("user", query)
+        self.short_term.add("assistant", answer, sources=sources or [])
+        self._turn_counter += 1
         await self._handle_overflow()
 
     # ── 溢出处理：短期 -> 中期压缩 ──────────────────────────────────
@@ -112,7 +137,8 @@ class MemoryManager:
         }
 
     # ── 工具方法 ─────────────────────────────────────────────────────
-    def clear_all(self) -> None:
+    def clear_all(self, include_long_term: bool = False) -> None:
         self.short_term.clear()
         self.mid_term.clear()
-        # long_term 不清除（跨会话持久）
+        if include_long_term:
+            self.long_term.clear_session(self.session_id)
