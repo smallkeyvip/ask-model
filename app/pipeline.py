@@ -50,6 +50,7 @@ class RAGPipeline:
         self.postprocessor = PostProcessor()
         self.preprocessor = InputPreprocessor(
             business_keywords=s.BUSINESS_DOMAIN_KEYWORDS or None,
+            llm_client=self.llm,
         )
 
         # 会话级记忆管理（按 session_id 隔离）
@@ -135,6 +136,11 @@ class RAGPipeline:
             self._sessions[session_id][0].clear_all()
             del self._sessions[session_id]
             logger.info(f"[Pipeline] 会话已清除: {session_id}")
+
+    async def aclose(self) -> None:
+        """释放 Pipeline 持有的异步网络资源。"""
+        await self.preprocessor.aclose()
+        await self.llm.aclose()
 
     # ── 非流式问答 ───────────────────────────────────────────────────
     async def ask(self, query: str, session_id: str = "default") -> dict:

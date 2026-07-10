@@ -21,7 +21,7 @@ SENSITIVE_CATEGORIES = ("political", "violence", "pornographic", "illegal")
 _SENSITIVE_CORE: Dict[str, Any] = {
     "keywords": {
         "political": [
-            "六四", "64", "8964", "八九六四", "天安门事件", "天安门风波",
+            "六四", "8964", "八九六四", "天安门事件", "天安门风波",
             "法轮功", "法轮大法", "falun", "falungong", "flg",
             "台独", "藏独", "疆独", "港独",
             "台湾独立", "西藏独立", "新疆独立", "香港独立",
@@ -36,7 +36,7 @@ _SENSITIVE_CORE: Dict[str, Any] = {
         "violence": [
             "恐怖袭击", "恐怖主义", "恐怖分子", "极端组织",
             "炸弹制作", "制作炸弹", "爆炸物", "引爆装置", "遥控炸弹",
-            "爆破", "引爆", "炸药", "雷管",
+            "爆破", "引爆", "雷管",
             "枪击", "枪杀", "持枪", "砍人", "刺杀",
             "屠杀", "血洗", "灭门", "报复社会",
             "纵火", "放火", "投毒",
@@ -47,8 +47,8 @@ _SENSITIVE_CORE: Dict[str, Any] = {
         "pornographic": [
             "色情", "淫秽", "涉黄", "黄色内容",
             "裸聊", "裸照", "私密照", "成人视频",
-            "成人影片", "成人网站", "毛片", "黄片", "AV",
-            "一夜情", "约炮", "yp",
+            "成人影片", "成人网站", "毛片", "黄片",
+            "一夜情", "约炮",
             "嫖娼", "卖淫", "援交",
             "性服务", "色情服务", "特殊服务", "上门服务",
             "儿童色情", "未成年色情", "儿童性剥削",
@@ -70,7 +70,7 @@ _SENSITIVE_CORE: Dict[str, Any] = {
             "代孕", "非法代孕",
             "买凶", "买凶杀人", "雇凶",
             "暗网", "深网", "黑市",
-            "诈骗", "电信诈骗", "网络诈骗", "杀猪盘",
+            "电信诈骗", "网络诈骗", "杀猪盘",
             "盗号", "撞库", "脱库", "黑产",
             "办假证", "假证", "假身份证", "假学历",
         ],
@@ -86,6 +86,12 @@ _SENSITIVE_CORE: Dict[str, Any] = {
     },
     "rules": {
         "political": [
+            {
+                "name": "political_ambiguous_number_context",
+                "type": "keyword_context",
+                "keywords": ["64"],
+                "contexts": ["事件", "风波", "运动", "纪念", "悼念", "天安门"],
+            },
             {
                 "name": "political_person_direct",
                 "type": "direct_list",
@@ -112,6 +118,12 @@ _SENSITIVE_CORE: Dict[str, Any] = {
         ],
         "violence": [
             {
+                "name": "violence_explosive_intent",
+                "type": "keyword_context",
+                "keywords": ["炸药"],
+                "contexts": ["制作", "制造", "自制", "购买", "引爆", "投放", "配方", "教程"],
+            },
+            {
                 "name": "violence_method_action_target",
                 "type": "action_target",
                 "actions": ["制作", "制造", "自制", "购买", "引爆", "投放"],
@@ -119,6 +131,12 @@ _SENSITIVE_CORE: Dict[str, Any] = {
             },
         ],
         "illegal": [
+            {
+                "name": "illegal_fraud_intent",
+                "type": "keyword_context",
+                "keywords": ["诈骗"],
+                "contexts": ["实施", "组织", "参与", "教程", "方法", "话术", "骗钱", "团伙", "引流", "获利"],
+            },
             {
                 "name": "illegal_trade_action_target",
                 "type": "action_target",

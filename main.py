@@ -36,8 +36,11 @@ async def lifespan(app: FastAPI):
     logger.info("正在初始化 RAG Pipeline...")
     pipeline = RAGPipeline()
     logger.info("RAG Pipeline 初始化完成 ✓")
-    yield
-    logger.info("服务关闭")
+    try:
+        yield
+    finally:
+        await pipeline.aclose()
+        logger.info("服务关闭")
 
 
 app = FastAPI(
