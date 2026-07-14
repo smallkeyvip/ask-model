@@ -18,7 +18,15 @@ document_id 必须使用输入编号且不得重复；score 范围为 0 到 10�
 
 
 def count_tokens_approx(text: str) -> int:
-    """优先使用 tokenizer，依赖不可用时使用保守估算。"""
+    """计算文本 token 数，并在 tokenizer 不可用时执行保守估算。
+
+    Args:
+        text: 需要计数的上下文文本。
+
+    Returns:
+        使用 ``cl100k_base`` 得到的精确计数；任何 tokenizer 加载或编码失败时，
+        返回按中文字符和其他字符比例估算且最小为 1 的整数。
+    """
     try:
         import tiktoken
         return len(tiktoken.get_encoding("cl100k_base").encode(text))
@@ -42,14 +50,31 @@ class Reranker:
         max_context_tokens: int = 3000,
         llm_client: Optional[LLMClient] = None,
     ):
+        """配置候选数量、上下文预算和用于精排的 LLM 客户端。
+
+        Args:
+            top_k: 最终最多保留的文档数量。
+            max_context_tokens: 最终文档正文允许占用的总 token 上限。
+            llm_client: 可选的共享 LLM 客户端；未提供时创建专用客户端。
+        """
         self.top_k = top_k
         self.max_context_tokens = max_context_tokens
         self._llm = llm_client or LLMClient()
 
     async def rerank(self, query: str, documents: List[dict]) -> List[dict]:
-        """
-        对检索结果进行重排和压缩。
-        返回: 重排后的文档列表（不超过 top_k 条，总 token 不超过 max_context_tokens）
+        """过滤、按需调用 LLM 精排，并把候选压缩到数量与 token 预算内。
+
+        Args:
+            query: 用于评估相关性的当前问题。
+            documents: 按召回顺序排列的文档；每项应包含 ``content``，可选 ``score``。
+
+        Returns:
+            最多 ``top_k`` 条文档，正文按 ``max_context_tokens`` 预算执行截断。
+            输入为空时返回空列表；快速过滤清空全部候选时保留原列表前三项兜底。
+            截断提示文字在前缀预算计算后追加，因此最终计数可能比预算略高。
+
+        Raises:
+            KeyError: 最终候选缺少必需的 ``content`` 字段。
         """
         if not documents:
             return []
@@ -73,7 +98,16 @@ class Reranker:
         return reranked
 
     async def _llm_rerank(self, query: str, documents: List[dict]) -> List[dict]:
-        """使用 LLM 对文档进行精排"""
+        """让 LLM 为前十条文档评分，并按评分降序返回全部候选。
+
+        Args:
+            query: 当前用户问题。
+            documents: 快速过滤后的候选文档列表。
+
+        Returns:
+            带 ``rerank_score`` 副本的排序列表。只评估前十条，未返回评分的文档
+            使用原始召回分乘以五作为兜底；任何异常都会返回原列表及原顺序。
+        """
         try:
             # 构建文档列表文本
             doc_texts = []
@@ -114,7 +148,19 @@ class Reranker:
 
     @staticmethod
     def _parse_rerank_scores(text: str, expected_count: int) -> Dict[int, float]:
-        """严格解析并校验文档编号与评分。"""
+        """严格解析 LLM 返回的文档编号与相关性评分。
+
+        Args:
+            text: 预期为 JSON 数组的模型原始输出。
+            expected_count: 本次允许出现的最大文档编号。
+
+        Returns:
+            从一基 ``document_id`` 到浮点评分的映射；允许模型省略部分文档。
+
+        Raises:
+            json.JSONDecodeError: 输出不是合法 JSON。
+            ValueError: 顶层或条目结构错误、编号越界或重复，或者评分不是 0 到 10。
+        """
         payload = json.loads(text)
         if not isinstance(payload, list):
             raise ValueError("rerank result must be a list")
@@ -134,7 +180,19 @@ class Reranker:
         return scores
 
     def _truncate_to_token_limit(self, documents: List[dict]) -> List[dict]:
-        """截断文档使总 token 不超过 max_context_tokens"""
+        """按顺序保留文档，并用二分查找按 token 预算截断最后一条正文前缀。
+
+        Args:
+            documents: 已按相关性排序且包含 ``content`` 的文档列表。
+
+        Returns:
+            按预算选择的文档列表。剩余预算超过 50 token 时会复制并截断当前文档，
+            再追加未计入二分预算的“已截断”标记；否则直接停止。未被截断的文档
+            保持原对象引用。
+
+        Raises:
+            KeyError: 文档缺少 ``content`` 字段。
+        """
         result = []
         total_tokens = 0
         for doc in documents:

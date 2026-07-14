@@ -38,16 +38,21 @@ class PromptBuilder:
         knowledge_docs: List[dict],
         memory_context: dict,
     ) -> List[dict]:
-        """
-        构建完整的 messages 列表供 LLM 调用。
+        """按系统约束、记忆和当前问题的顺序构建 LLM 消息列表。
 
-        参数:
-            query: 用户当前问题
-            knowledge_docs: 检索+重排后的知识文档
-            memory_context: 三层记忆上下文
-                - short_term_messages: 最近对话
-                - mid_term_summary: 滚动摘要
-                - long_term_memories: 长期记忆召回
+        Args:
+            query: 已通过预处理、需要回答的当前用户问题。
+            knowledge_docs: 检索并重排后的知识文档；每项至少包含 ``content``，
+                可选 ``source`` 用于标识来源。
+            memory_context: 三层记忆上下文，支持 ``short_term_messages``、
+                ``mid_term_summary`` 和 ``long_term_memories`` 三个键。
+
+        Returns:
+            OpenAI 兼容的消息字典列表。系统消息位于最前，当前用户问题位于最后；
+            中长期记忆存在时插入二者之间。
+
+        Raises:
+            KeyError: 知识文档缺少 ``content``，或长期记忆项缺少 ``content``。
         """
         messages = []
 
@@ -91,7 +96,22 @@ class PromptBuilder:
         knowledge_docs: List[dict],
         memory_context: dict,
     ) -> str:
-        """将 system prompt 与知识库上下文融合"""
+        """将基础系统约束与不可信知识文档封装为单条系统提示。
+
+        文档来源会移除换行、尖括号和双引号，文档正文则放入明确的
+        ``knowledge_document`` 边界中，提示模型只能把它当作数据使用。
+
+        Args:
+            knowledge_docs: 已按相关性排序的知识文档列表。
+            memory_context: 预留的记忆上下文参数；记忆消息由
+                :meth:`build_messages` 单独插入，本方法当前不读取该参数。
+
+        Returns:
+            包含基础规则、知识上下文或“未检索到内容”约束的系统提示文本。
+
+        Raises:
+            KeyError: 任一知识文档缺少 ``content`` 字段。
+        """
         parts = [SYSTEM_PROMPT]
 
         # 注入知识库上下文

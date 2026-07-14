@@ -73,9 +73,25 @@ class Settings(BaseSettings):
 
     @property
     def allowed_origins(self) -> list[str]:
+        """将逗号分隔的 CORS 配置解析为可直接传给 FastAPI 的来源列表。
+
+        Returns:
+            去除首尾空白并丢弃空项后的来源字符串列表；配置为空时返回空列表。
+        """
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
 
 @lru_cache
 def get_settings() -> Settings:
+    """加载并缓存当前进程使用的全局配置实例。
+
+    首次调用时由 ``pydantic-settings`` 合并环境变量与 ``.env``；后续调用返回
+    同一个 ``Settings`` 对象，避免重复解析配置。
+
+    Returns:
+        当前进程共享的配置实例。
+
+    Raises:
+        pydantic.ValidationError: 必填配置缺失或环境变量无法转换为声明类型。
+    """
     return Settings()  # type: ignore[call-arg]

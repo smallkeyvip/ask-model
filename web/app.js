@@ -1,6 +1,19 @@
 "use strict";
 
+/**
+ * 返回文档中第一个匹配选择器的元素。
+ *
+ * @param {string} selector - 传给 `document.querySelector` 的 CSS 选择器。
+ * @returns {Element|null} 匹配到的首个元素；不存在时返回 `null`。
+ */
 const $ = (selector) => document.querySelector(selector);
+
+/**
+ * 返回文档中匹配选择器的全部元素快照。
+ *
+ * @param {string} selector - 传给 `document.querySelectorAll` 的 CSS 选择器。
+ * @returns {Element[]} 从静态 `NodeList` 转换得到的普通数组。
+ */
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 const state = {
@@ -13,6 +26,15 @@ const state = {
 
 let toastTimer = null;
 
+/**
+ * 向同源后端发送 JSON 请求并统一解析成功或错误响应。
+ *
+ * @param {string} path - 相对当前站点的 API 路径。
+ * @param {RequestInit} [options={}] - `fetch` 配置；该对象最后展开，可覆盖默认凭据或请求头。
+ * @returns {Promise<any>} 后端 JSON 响应；空响应或非法 JSON 被解析为空对象。
+ * @throws {Error} HTTP 状态非成功时抛出带用户消息和数字 `status` 属性的错误；
+ *   已登录状态收到 401 时会先清空本地认证状态。
+ */
 async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -30,6 +52,13 @@ async function api(path, options = {}) {
   return payload;
 }
 
+/**
+ * 显示一条会自动消失的全局提示。
+ *
+ * @param {string} message - 使用 `textContent` 展示的提示文本。
+ * @returns {void}
+ * 副作用：重置上一次提示计时器，并在 3.2 秒后隐藏提示元素。
+ */
 function showToast(message) {
   const toast = $("#toast");
   toast.textContent = message;
@@ -38,12 +67,25 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.add("hidden"), 3200);
 }
 
+/**
+ * 批量切换表单内所有可交互控件的禁用状态。
+ *
+ * @param {HTMLFormElement} form - 需要锁定或解锁的表单。
+ * @param {boolean} busy - `true` 表示禁止输入、选择和提交。
+ * @returns {void}
+ */
 function setFormBusy(form, busy) {
   form.querySelectorAll("input, textarea, select, button").forEach((control) => {
     control.disabled = busy;
   });
 }
 
+/**
+ * 显示认证视图，并在登录与邀请激活表单之间切换。
+ *
+ * @param {"login"|"invite"} [mode="login"] - 需要显示的认证流程。
+ * @returns {void}
+ */
 function showAuth(mode = "login") {
   $("#auth-view").classList.remove("hidden");
   $("#app-view").classList.add("hidden");
@@ -51,6 +93,13 @@ function showAuth(mode = "login") {
   $("#invite-form").classList.toggle("hidden", mode !== "invite");
 }
 
+/**
+ * 建立前端登录状态、更新用户资料区并进入成员工作区。
+ *
+ * @param {{id:string, email:string, display_name:string, role:string}} user - 后端返回的当前用户。
+ * @returns {Promise<void>} 会话列表加载并切换到问答视图后完成。
+ * @throws {Error} 初始会话列表请求失败时向调用方传播。
+ */
 async function enterApp(user) {
   state.user = user;
   $("#auth-view").classList.add("hidden");
@@ -63,6 +112,12 @@ async function enterApp(user) {
   navigate("chat");
 }
 
+/**
+ * 绑定页面事件并根据邀请 URL 或现有 Cookie 选择首屏。
+ *
+ * @returns {Promise<void>} 初始化流程完成后兑现；恢复登录失败会显示登录表单而不抛错。
+ * 副作用：只应在页面启动时调用一次，重复调用会重复注册事件监听器。
+ */
 async function initialize() {
   bindEvents();
   const params = new URLSearchParams(window.location.search);
@@ -78,6 +133,14 @@ async function initialize() {
   }
 }
 
+/**
+ * 为认证、导航、会话、问答、管理和上传控件注册事件处理器。
+ *
+ * Enter（未按 Shift）会提交问答；示例问题会写入输入框；管理标签会触发对应
+ * 数据加载。内联回调仅捕获当前按钮或事件，实际业务由具名处理函数完成。
+ *
+ * @returns {void}
+ */
 function bindEvents() {
   $("#login-form").addEventListener("submit", handleLogin);
   $("#invite-form").addEventListener("submit", handleInviteAcceptance);
@@ -108,6 +171,13 @@ function bindEvents() {
   $("#upload-form").addEventListener("submit", handleUpload);
 }
 
+/**
+ * 处理登录表单提交，并把认证错误显示在表单内。
+ *
+ * @param {SubmitEvent} event - 登录表单提交事件。
+ * @returns {Promise<void>} 请求、视图切换及表单解锁完成后兑现。
+ * 副作用：请求期间禁用表单；成功时设置全局用户状态，失败时更新错误文本。
+ */
 async function handleLogin(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -129,6 +199,13 @@ async function handleLogin(event) {
   }
 }
 
+/**
+ * 校验两次密码并使用 URL 中的一次性令牌激活邀请账号。
+ *
+ * @param {SubmitEvent} event - 邀请激活表单提交事件。
+ * @returns {Promise<void>} 激活请求和后续工作区进入流程完成后兑现。
+ * 副作用：成功后从地址栏移除邀请令牌；密码不一致时不发送请求。
+ */
 async function handleInviteAcceptance(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -157,11 +234,23 @@ async function handleInviteAcceptance(event) {
   }
 }
 
+/**
+ * 尝试撤销服务端会话，并无条件完成本地退出。
+ *
+ * @returns {Promise<void>} 服务端请求成功或失败、且本地状态已清理后兑现。
+ * 副作用：即使网络请求失败，也会清空用户、会话、消息和密码输入框。
+ */
 async function handleLogout() {
   try { await api("/api/auth/logout", { method: "POST", body: "{}" }); } catch (_) { /* local logout still proceeds */ }
   resetAuthentication();
 }
 
+/**
+ * 清空所有本地认证与对话状态并返回登录视图。
+ *
+ * @returns {void}
+ * 副作用：不发送服务端请求；同时清除消息 DOM、关闭侧边栏和清空密码字段。
+ */
 function resetAuthentication() {
   state.user = null;
   state.sessions = [];
@@ -172,6 +261,13 @@ function resetAuthentication() {
   showAuth("login");
 }
 
+/**
+ * 在问答与管理视图之间切换，并同步导航选中状态。
+ *
+ * @param {"chat"|"admin"} view - 目标工作区。
+ * @returns {void}
+ * 副作用：非管理员请求管理视图时直接忽略；进入管理视图会默认选择邀请标签并加载数据。
+ */
 function navigate(view) {
   if (view === "admin" && state.user?.role !== "admin") return;
   state.currentView = view;
@@ -185,22 +281,44 @@ function navigate(view) {
   closeSidebar();
 }
 
+/**
+ * 打开移动端侧边栏及其遮罩层。
+ *
+ * @returns {void}
+ */
 function openSidebar() {
   $("#sidebar").classList.add("open");
   $("#sidebar-scrim").classList.remove("hidden");
 }
 
+/**
+ * 关闭侧边栏并隐藏遮罩层；重复调用保持幂等。
+ *
+ * @returns {void}
+ */
 function closeSidebar() {
   $("#sidebar").classList.remove("open");
   $("#sidebar-scrim").classList.add("hidden");
 }
 
+/**
+ * 从后端刷新当前用户会话列表并重新渲染侧边栏。
+ *
+ * @returns {Promise<void>} 全局 `state.sessions` 更新及 DOM 渲染完成后兑现。
+ * @throws {Error} API 请求失败时向调用方传播。
+ */
 async function loadSessions() {
   const data = await api("/api/sessions");
   state.sessions = data.sessions;
   renderSessions();
 }
 
+/**
+ * 根据全局会话状态重建可选择、可删除的会话列表。
+ *
+ * @returns {void}
+ * 副作用：清空原列表 DOM；无会话时渲染占位文本，当前会话获得 `active` 类。
+ */
 function renderSessions() {
   const list = $("#session-list");
   list.replaceChildren();
@@ -235,6 +353,12 @@ function renderSessions() {
   });
 }
 
+/**
+ * 创建一个“新对话”，设为当前会话并重置问答视图。
+ *
+ * @returns {Promise<void>} 创建成功或错误提示已经显示后兑现。
+ * 副作用：全局问答忙碌时直接返回；成功时把新会话插入列表首位并聚焦输入框。
+ */
 async function createSession() {
   if (state.busy) return;
   try {
@@ -253,6 +377,13 @@ async function createSession() {
   }
 }
 
+/**
+ * 切换当前会话并加载其仍可用的短期消息。
+ *
+ * @param {string} sessionId - 目标聊天会话 ID。
+ * @returns {Promise<void>} 消息加载或错误提示完成后兑现。
+ * 副作用：忙碌中或已选中目标时不执行；请求期间先清空当前消息，最后关闭侧边栏。
+ */
 async function selectSession(sessionId) {
   if (state.busy || state.currentSessionId === sessionId) return;
   state.currentSessionId = sessionId;
@@ -267,6 +398,13 @@ async function selectSession(sessionId) {
   closeSidebar();
 }
 
+/**
+ * 经用户确认后删除会话及服务端个人记忆，并同步本地状态。
+ *
+ * @param {string} sessionId - 需要删除的聊天会话 ID。
+ * @returns {Promise<void>} 删除、取消或错误提示处理完成后兑现。
+ * 副作用：忙碌状态或用户取消确认时不请求；删除当前会话会同时清空消息区域。
+ */
 async function deleteSession(sessionId) {
   if (state.busy || !window.confirm("删除这段对话及其个人记忆？")) return;
   try {
@@ -283,6 +421,12 @@ async function deleteSession(sessionId) {
   }
 }
 
+/**
+ * 移除所有已渲染消息并恢复空会话占位状态。
+ *
+ * @returns {void}
+ * 副作用：同时清空问答阶段状态文本，但不修改服务端或会话列表。
+ */
 function clearMessages() {
   const list = $("#message-list");
   list.querySelectorAll(".message").forEach((message) => message.remove());
@@ -290,6 +434,14 @@ function clearMessages() {
   $("#chat-status").textContent = "";
 }
 
+/**
+ * 安全创建并追加一条用户或助手消息。
+ *
+ * @param {"user"|"assistant"} role - 决定样式与角色徽标的消息角色。
+ * @param {string} [content=""] - 通过 `textContent` 写入的初始正文。
+ * @returns {{message: HTMLElement, body: HTMLElement}} 外层消息和可继续追加正文的内容元素。
+ * 副作用：隐藏空状态、追加到消息列表并平滑滚动到新消息。
+ */
 function appendMessage(role, content = "") {
   $("#empty-chat").classList.add("hidden");
   const message = document.createElement("article");
@@ -306,6 +458,14 @@ function appendMessage(role, content = "") {
   return { message, body };
 }
 
+/**
+ * 在指定消息正文末尾渲染后端返回的引用来源链接或标签。
+ *
+ * @param {HTMLElement} message - `appendMessage` 创建的消息容器。
+ * @param {Array<{index:number, source:string, url?:string}>} [sources=[]] - 后端已校验的来源元数据。
+ * @returns {void}
+ * 副作用：先删除该消息已有来源列表；带 URL 的项在新标签页打开并设置安全 `rel`。
+ */
 function renderSources(message, sources = []) {
   message.querySelector(".source-list")?.remove();
   if (!sources.length) return;
@@ -325,6 +485,14 @@ function renderSources(message, sources = []) {
   message.querySelector(".message-content").append(list);
 }
 
+/**
+ * 提交问题、消费 SSE 回答并维护整个问答交互的忙碌状态。
+ *
+ * @param {SubmitEvent} event - 问答表单提交事件。
+ * @returns {Promise<void>} 会话创建、流消费、列表刷新或错误展示完成后兑现。
+ * 副作用：必要时先创建会话；立即追加用户和空助手消息。完成事件会用服务端最终
+ *   `answer` 覆盖增量文本并渲染来源，所有退出路径都会恢复发送按钮和状态栏。
+ */
 async function handleChatSubmit(event) {
   event.preventDefault();
   const query = $("#chat-input").value.trim();
@@ -373,6 +541,16 @@ async function handleChatSubmit(event) {
   }
 }
 
+/**
+ * 增量解析一个 UTF-8 Server-Sent Events 字节流。
+ *
+ * @param {ReadableStream<Uint8Array>} stream - `fetch` 响应正文流。
+ * @param {(event:string, data:any) => void} onEvent - 每个完整事件块的同步回调。
+ * @returns {Promise<void>} 流读取结束且所有完整双换行分隔事件已分发后兑现。
+ * @throws {Error} 底层读取失败或 `onEvent` 主动抛出的错误。
+ * @description 支持 CRLF，合并多行 `data:`；JSON 解析失败时把原始文本交给回调。
+ *   流结束时未形成完整事件块的尾部缓冲不会分发。
+ */
 async function consumeEventStream(stream, onEvent) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -401,12 +579,25 @@ async function consumeEventStream(stream, onEvent) {
   }
 }
 
+/**
+ * 根据内容高度自动调整问答输入框，最大高度限制为 150 像素。
+ *
+ * @returns {void}
+ * 副作用：先重置为自动高度以允许收缩，再写入计算后的像素高度。
+ */
 function resizeComposer() {
   const input = $("#chat-input");
   input.style.height = "auto";
   input.style.height = `${Math.min(input.scrollHeight, 150)}px`;
 }
 
+/**
+ * 切换管理子页面，并按需刷新邀请或用户数据。
+ *
+ * @param {"invite"|"documents"|"users"} tab - 目标管理标签。
+ * @returns {void}
+ * 副作用：邀请和用户标签会异步发起数据加载，但本函数不等待其完成。
+ */
 function selectAdminTab(tab) {
   $$(".admin-tab").forEach((button) => button.classList.toggle("active", button.dataset.adminTab === tab));
   $("#admin-invite").classList.toggle("hidden", tab !== "invite");
@@ -416,6 +607,13 @@ function selectAdminTab(tab) {
   if (tab === "users") loadUsers();
 }
 
+/**
+ * 提交管理员邀请表单并显示本次唯一可见的完整邀请 URL。
+ *
+ * @param {SubmitEvent} event - 创建邀请表单提交事件。
+ * @returns {Promise<void>} 请求、邀请列表刷新及表单解锁完成后兑现。
+ * 副作用：请求期间禁用表单；成功后清空邮箱并显示可复制链接。
+ */
 async function handleCreateInvitation(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -439,6 +637,12 @@ async function handleCreateInvitation(event) {
   }
 }
 
+/**
+ * 将当前邀请 URL 写入剪贴板，并为旧浏览器提供 `execCommand` 降级。
+ *
+ * @returns {Promise<void>} 复制成功或失败提示显示后兑现；输入为空时立即完成。
+ * 副作用：降级或失败时选中邀请 URL 输入框，便于用户手动复制。
+ */
 async function copyInvitation() {
   const value = $("#invite-url").value;
   if (!value) return;
@@ -456,6 +660,11 @@ async function copyInvitation() {
   }
 }
 
+/**
+ * 获取管理员可见的邀请列表并渲染，失败时显示全局提示。
+ *
+ * @returns {Promise<void>} 请求与渲染或错误提示完成后兑现，不向事件调用方抛错。
+ */
 async function loadInvitations() {
   try {
     const data = await api("/api/admin/invitations");
@@ -463,6 +672,13 @@ async function loadInvitations() {
   } catch (error) { showToast(error.message); }
 }
 
+/**
+ * 重建邀请数据表并把后端状态映射为中文标签和样式。
+ *
+ * @param {Array<{email:string, role:string, status:string, expires_at:number}>} invitations - 邀请记录列表。
+ * @returns {void}
+ * 副作用：总是先创建固定表头；时间戳按 `formatDate` 使用本地时区展示。
+ */
 function renderInvitations(invitations) {
   const table = $("#invitation-table");
   table.replaceChildren(createDataRow(["邮箱", "角色", "状态", "有效期"], true));
@@ -479,6 +695,11 @@ function renderInvitations(invitations) {
   });
 }
 
+/**
+ * 获取管理员可见的用户列表并渲染，失败时显示全局提示。
+ *
+ * @returns {Promise<void>} 请求与渲染或错误提示完成后兑现，不向事件调用方抛错。
+ */
 async function loadUsers() {
   try {
     const data = await api("/api/admin/users");
@@ -486,6 +707,13 @@ async function loadUsers() {
   } catch (error) { showToast(error.message); }
 }
 
+/**
+ * 重建成员数据表，并为每个成员创建启用或停用操作。
+ *
+ * @param {Array<{id:string, display_name:string, email:string, role:string, is_active:boolean, created_at:number}>} users - 用户公开资料。
+ * @returns {void}
+ * 副作用：当前登录用户自己的操作按钮会被禁用，防止前端发起自停用请求。
+ */
 function renderUsers(users) {
   const table = $("#user-table");
   table.replaceChildren(createDataRow(["成员", "角色", "加入时间", "状态"], true));
@@ -513,6 +741,13 @@ function renderUsers(users) {
   });
 }
 
+/**
+ * 更新指定成员的启用状态，并在成功后刷新整个用户列表。
+ *
+ * @param {string} userId - 目标用户 ID。
+ * @param {boolean} active - 需要设置的新状态。
+ * @returns {Promise<void>} 更新、刷新和提示处理完成后兑现；错误会转为全局提示。
+ */
 async function updateUserStatus(userId, active) {
   try {
     await api(`/api/admin/users/${encodeURIComponent(userId)}`, {
@@ -524,6 +759,13 @@ async function updateUserStatus(userId, active) {
   } catch (error) { showToast(error.message); }
 }
 
+/**
+ * 创建统一的数据表行，可安全容纳纯文本或预构造 DOM 节点。
+ *
+ * @param {Array<string|Node>} cells - 按列顺序排列的内容。
+ * @param {boolean} [header=false] - 是否附加表头样式类。
+ * @returns {HTMLDivElement} 尚未插入文档的数据行元素。
+ */
 function createDataRow(cells, header = false) {
   const row = document.createElement("div");
   row.className = `data-row${header ? " data-row--header" : ""}`;
@@ -536,11 +778,25 @@ function createDataRow(cells, header = false) {
   return row;
 }
 
+/**
+ * 根据文件选择控件更新上传摘要文本。
+ *
+ * @returns {void}
+ * 副作用：有文件时显示数量，否则恢复支持格式提示；不会读取文件内容。
+ */
 function updateFileSummary() {
   const files = Array.from($("#upload-files").files || []);
   $("#file-summary").textContent = files.length ? `${files.length} 个文件` : "TXT / MD / CSV / JSON";
 }
 
+/**
+ * 读取所选文本文件与粘贴内容，并作为一次管理员文档入库请求提交。
+ *
+ * @param {SubmitEvent} event - 文档上传表单提交事件。
+ * @returns {Promise<void>} 文件读取、请求和表单解锁完成后兑现。
+ * 副作用：请求期间禁用表单；无内容时产生本地错误。成功后更新文档总数、
+ *   清空文件和粘贴区并显示服务端消息，失败时在表单内显示错误。
+ */
 async function handleUpload(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -569,6 +825,12 @@ async function handleUpload(event) {
   }
 }
 
+/**
+ * 把 Unix 秒时间戳格式化为中文本地月日和时分。
+ *
+ * @param {number} timestamp - 自 Unix 纪元起的秒数。
+ * @returns {string} 由浏览器 `zh-CN` 国际化实现生成的本地时区文本。
+ */
 function formatDate(timestamp) {
   return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp * 1000));
 }

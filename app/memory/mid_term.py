@@ -41,12 +41,27 @@ class MidTermMemory:
         max_summary_tokens: int = 500,
         llm_client: Optional[LLMClient] = None,
     ):
+        """初始化进程内滚动摘要存储。
+
+        Args:
+            max_summary_tokens: 单次摘要请求允许生成的最大 token 数，也会写入提示约束。
+            llm_client: 可选的共享 LLM 客户端；未提供时创建新客户端。
+        """
         self.max_summary_tokens = max_summary_tokens
         self._summaries: List[Summary] = []
         self._llm = llm_client or LLMClient()
 
     async def compress_turns(self, turns, start_idx: int) -> Optional[Summary]:
-        """对溢出的 turns 生成摘要，存入 self._summaries"""
+        """把一批溢出消息压缩成摘要并追加到中期列表。
+
+        Args:
+            turns: 按时间顺序排列、具有 ``role`` 和 ``content`` 属性的消息序列。
+            start_idx: 该批消息在逻辑历史中的起始索引，用于记录覆盖范围。
+
+        Returns:
+            新建并已保存的 ``Summary``；输入为空或 LLM 调用失败时返回 ``None``。
+            失败会记录日志，不向调用方抛出 LLM 异常。
+        """
         if not turns:
             return None
 
@@ -71,7 +86,18 @@ class MidTermMemory:
             return None
 
     async def _call_llm(self, system_prompt: str, user_msg: str) -> str:
-        """调用 DeepSeek 生成摘要"""
+        """使用低温度和固定超时调用底层 LLM 生成摘要。
+
+        Args:
+            system_prompt: 包含摘要规则与长度限制的系统提示。
+            user_msg: 包含待压缩对话的用户消息。
+
+        Returns:
+            模型生成的原始摘要文本。
+
+        Raises:
+            Exception: 底层 LLM 调用错误；由 :meth:`compress_turns` 捕获并降级。
+        """
         return await self._llm.chat(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -83,7 +109,11 @@ class MidTermMemory:
         )
 
     def get_summaries_text(self) -> str:
-        """拼接所有摘要，供 Prompt 使用"""
+        """按生成顺序把所有滚动摘要拼成可注入 Prompt 的文本。
+
+        Returns:
+            带一基编号标题的摘要段落；尚无摘要时返回空字符串。
+        """
         if not self._summaries:
             return ""
         parts = []
@@ -93,7 +123,16 @@ class MidTermMemory:
 
     @property
     def summaries(self) -> List[Summary]:
+        """返回内部摘要列表的实时引用。
+
+        调用方可观察后续追加，也能够修改内部状态；只读场景应避免原地变更该列表。
+        """
         return self._summaries
 
     def clear(self) -> None:
+        """原地删除当前进程中的全部中期摘要。
+
+        清空后 :attr:`summaries` 的既有列表引用仍然有效但内容为空，
+        :meth:`get_summaries_text` 会返回空字符串；不会影响短期或长期记忆。
+        """
         self._summaries.clear()

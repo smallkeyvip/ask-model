@@ -38,6 +38,14 @@ class RAGPipeline:
     _EVICT_THROTTLE_SECONDS = 60
 
     def __init__(self):
+        """根据全局配置装配 RAG 各阶段及会话级内存状态。
+
+        创建共享 LLM 客户端并注入改写、重排和预处理组件，同时初始化远程/本地
+        检索器、Prompt 构建器和后处理器。会话记忆及锁按需创建，不在构造时预分配。
+
+        Raises:
+            Exception: 配置缺失、Chroma 初始化或检索组件构造失败。
+        """
         s = settings()
         self.llm = LLMClient()
         self.rewriter = QueryRewriter(llm_client=self.llm)
@@ -64,6 +72,15 @@ class RAGPipeline:
 
     @staticmethod
     def _session_key(user_id: str, session_id: str) -> str:
+        """构造同时隔离用户与聊天会话的进程内状态键。
+
+        Args:
+            user_id: 会话所属用户标识。
+            session_id: 聊天会话标识。
+
+        Returns:
+            ``user_id:session_id`` 形式的复合键。
+        """
         return f"{user_id}:{session_id}"
 
     def get_memory(
@@ -71,7 +88,21 @@ class RAGPipeline:
         session_id: str,
         user_id: str = "",
     ) -> MemoryManager:
-        """获取或创建会话级记忆管理器，内部自动清理过期会话"""
+        """获取或创建会话记忆，并按节流策略清理空闲会话。
+
+        Args:
+            session_id: 聊天会话标识。
+            user_id: 所有者标识；与会话 ID 共同决定隔离键。
+
+        Returns:
+            复用或新建的 ``MemoryManager``。复用时会把最后访问时间续期到当前时间。
+
+        Raises:
+            Exception: 过期记忆归档或新记忆管理器的 Chroma 初始化失败。
+
+        Notes:
+            全量过期扫描最多每 60 秒触发一次；新会话会同时准备对应的异步锁。
+        """
         now = time.time()
         session_key = self._session_key(user_id, session_id)
 
@@ -96,11 +127,31 @@ class RAGPipeline:
         return memory
 
     def _get_session_lock(self, user_id: str, session_id: str) -> asyncio.Lock:
+        """返回指定用户会话的独占异步锁，不存在时原子式创建字典项。
+
+        Args:
+            user_id: 会话所属用户标识。
+            session_id: 聊天会话标识。
+
+        Returns:
+            同一进程中该复合会话共享的 ``asyncio.Lock``。
+        """
         key = self._session_key(user_id, session_id)
         return self._session_locks.setdefault(key, asyncio.Lock())
 
     def _evict_expired(self, now: float) -> None:
-        """扫描并清理过期会话，过期前将记忆归档到长期存储"""
+        """归档并释放在给定时间点已经超过空闲 TTL 的会话。
+
+        Args:
+            now: 本次扫描统一使用的 Unix 时间戳，避免循环内时间漂移。
+
+        Notes:
+            每个过期会话先归档短期和中期内容，再删除内存管理器及对应锁；
+            没有过期项时不修改状态。
+
+        Raises:
+            Exception: 长期记忆批量归档失败；此时该会话不会被继续删除。
+        """
         ttl = settings().SESSION_TTL_SECONDS
         expired_ids = [
             sid for sid, (_, last_access) in self._sessions.items()
@@ -118,7 +169,18 @@ class RAGPipeline:
             logger.info(f"[Pipeline] 会话 {sid} 已过期（空闲 {idle_minutes} 分钟），记忆已归档并释放")
 
     def _archive_to_long_term(self, memory: MemoryManager) -> None:
-        """将短期对话和中期摘要归档到长期 Chroma 记忆"""
+        """把一个会话尚存的短期对话和全部中期摘要批量写入长期记忆。
+
+        Args:
+            memory: 即将过期或释放的会话记忆管理器。
+
+        Notes:
+            短期消息合并成一条 ``session_archive``，每个中期摘要形成一条
+            ``summary_archive``；两者都使用该会话 ID。没有内容时不访问 Chroma。
+
+        Raises:
+            Exception: Chroma 批量写入失败。
+        """
         items: List[dict] = []
 
         # ── 归档短期记忆中的全部对话 ──
@@ -157,7 +219,20 @@ class RAGPipeline:
         user_id: str = "",
         include_long_term: bool = True,
     ) -> None:
-        """清除指定会话的短期/中期记忆并释放会话"""
+        """清除指定用户会话的内存状态，并按需删除其长期记录。
+
+        Args:
+            session_id: 需要清除的聊天会话标识。
+            user_id: 会话所有者标识。
+            include_long_term: 是否同时删除该用户、该会话的持久记忆。
+
+        Notes:
+            活跃会话会先调用 ``MemoryManager.clear_all`` 再移除管理器和锁；会话
+            不在内存但要求删除长期记录时，会临时创建管理器执行所有权受限删除。
+
+        Raises:
+            Exception: Chroma 初始化或删除失败。
+        """
         session_key = self._session_key(user_id, session_id)
         if session_key in self._sessions:
             self._sessions[session_key][0].clear_all(include_long_term=include_long_term)
@@ -173,7 +248,11 @@ class RAGPipeline:
             memory.long_term.clear_session(session_id)
 
     async def aclose(self) -> None:
-        """释放 Pipeline 持有的异步网络资源。"""
+        """依次关闭预处理器自有资源、远程检索连接和共享 LLM 连接池。
+
+        预处理器使用本 Pipeline 注入的共享 LLM，因此不会重复关闭它；各组件的关闭
+        方法均允许在未初始化或已关闭时调用。
+        """
         await self.preprocessor.aclose()
         await self.retriever.aclose()
         await self.llm.aclose()
@@ -185,21 +264,24 @@ class RAGPipeline:
         session_id: str = "default",
         user_id: str = "",
     ) -> dict:
-        """
-        完整的 RAG 问答流程（非流式）。
+        """串行执行一次非流式 RAG 问答并在成功后记录完整对话。
 
-        返回:
-            {
-                "answer": str,
-                "sources": list,
-                "session_id": str,
-                "trace": {
-                    "rewritten_queries": list,
-                    "retrieved_count": int,
-                    "reranked_count": int,
-                    "elapsed_ms": int,
-                }
-            }
+        Args:
+            query: 用户原始问题；启用预处理时可能被指代消解结果替换。
+            session_id: 聊天会话标识。
+            user_id: 会话所有者标识，用于锁、内存和长期记忆隔离。
+
+        Returns:
+            含 ``answer``、``sources``、``session_id`` 和 ``trace`` 的字典。
+            ``trace`` 记录改写查询、召回/重排数量和耗时。预处理拦截时立即返回
+            无来源回答及 ``blocked`` 跟踪信息，不调用检索和生成，也不写入记忆。
+
+        Raises:
+            Exception: 记忆、改写、检索、重排、LLM、后处理或持久写入失败。
+                本层不吞掉异常，由 HTTP 路由统一转换为服务错误。
+
+        Notes:
+            同一用户会话的整个流程由独占锁串行化；只有最终回答成功后才追加问答记录。
         """
         lock = self._get_session_lock(user_id, session_id)
         async with lock:
@@ -263,9 +345,22 @@ class RAGPipeline:
         session_id: str = "default",
         user_id: str = "",
     ) -> AsyncGenerator[dict, None]:
-        """
-        流式 RAG 问答：检索阶段非流式，LLM 生成阶段流式输出。
-        每个 yield: {"type": "chunk|done|error", "data": ...}
+        """执行流式问答，并以结构化事件报告阶段、正文和最终结果。
+
+        Args:
+            query: 用户原始问题；启用预处理时可能替换为消解后的完整问题。
+            session_id: 聊天会话标识。
+            user_id: 会话所有者标识，用于锁与三层记忆隔离。
+
+        Yields:
+            ``{"type": ..., "data": ...}`` 事件：``status`` 报告处理阶段，
+            ``chunk`` 分段输出完成后处理的回答，``blocked`` 报告输入拦截，
+            ``done`` 携带最终回答/来源/跟踪信息，``error`` 携带可展示的失败消息。
+
+        Notes:
+            为保证脱敏和引用一致性，底层 LLM 增量会先完整缓冲和后处理，再按最多
+            120 个字符切块。普通异常被记录并转成 ``error`` 事件；任务取消异常原样
+            抛出。预处理拦截会依次产出 ``blocked`` 与 ``done``，且不写入记忆。
         """
         lock = self._get_session_lock(user_id, session_id)
         async with lock:

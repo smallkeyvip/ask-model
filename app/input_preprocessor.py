@@ -200,6 +200,16 @@ class InputPreprocessor:
         business_keywords: Optional[str] = None,
         llm_client: Optional[LLMClient] = None,
     ):
+        """加载敏感规则与业务词表，并准备输入判断使用的 LLM 客户端。
+
+        Args:
+            business_keywords: 可选的逗号分隔业务关键词；为空时使用内置领域词表。
+            llm_client: 可选的共享 LLM 客户端；未提供时创建并由本实例负责关闭。
+
+        Notes:
+            构造会合并外部敏感配置，对关键词、名单和组合规则做统一归一化，
+            并建立“规范化关键词到类别”的快速查找表。外部配置读取失败只记录日志。
+        """
         s = settings()
         self._llm = llm_client or LLMClient()
         self._owns_llm = llm_client is None
@@ -247,15 +257,20 @@ class InputPreprocessor:
         query: str,
         history_messages: Optional[List[dict]] = None,
     ) -> PreprocessResult:
-        """
-        对用户输入执行完整预处理流程。
+        """依次执行输入校验、敏感检查、指代消解和业务相关性判断。
 
-        参数:
-            query: 用户原始问题
-            history_messages: 短期记忆中的对话历史 [{"role":..., "content":...}, ...]
+        Args:
+            query: 用户原始问题。非字符串、纯空白或超过 2000 字符时直接拦截。
+            history_messages: 可选短期对话历史；只保留最近六条合法的用户/助手消息，
+                并受单条 4000 字符、总计 12000 字符限制。
 
-        返回:
-            PreprocessResult
+        Returns:
+            ``PreprocessResult``。放行时 ``processed_query`` 为原问题或消解后的独立问题；
+            拦截时 ``reason`` 可直接展示，并保留未经 ``strip`` 的 ``original_query``。
+
+        Notes:
+            敏感检查在 LLM 消解前后各执行一次，防止改写引入未检查内容。指代消解
+            失败回退原文；业务 LLM 失败或返回非法标签时放行，避免误阻塞正常咨询。
         """
         original_query = query if isinstance(query, str) else ""
         if not isinstance(query, str) or not query.strip():
@@ -311,7 +326,10 @@ class InputPreprocessor:
         )
 
     async def aclose(self) -> None:
-        """关闭由预处理器自行创建的 LLM 客户端。"""
+        """关闭由本预处理器自行创建的 LLM 连接池。
+
+        构造时传入共享客户端则不执行关闭，资源生命周期仍由调用方负责。
+        """
         if self._owns_llm:
             await self._llm.aclose()
 
@@ -319,7 +337,15 @@ class InputPreprocessor:
     def _sanitize_history_messages(
         history_messages: Optional[List[dict]],
     ) -> List[dict]:
-        """过滤异常历史并限制送入预处理 LLM 的上下文长度。"""
+        """过滤异常历史并从最新消息向前应用条数与字符预算。
+
+        Args:
+            history_messages: 候选历史列表；非列表值直接视为空历史。
+
+        Returns:
+            仍按原时间顺序排列的新字典列表，每项只含合法 ``role`` 和裁剪后的
+            ``content``。无效角色、非字符串正文和空白消息会被忽略。
+        """
         if not isinstance(history_messages, list):
             return []
 
@@ -350,7 +376,15 @@ class InputPreprocessor:
     # ── Step 1: 敏感词过滤 ───────────────────────────────────────────
 
     def _check_sensitive(self, query: str) -> PreprocessResult:
-        """关键词包含匹配，命中任一敏感词即拦截"""
+        """使用组合规则和规范化关键词检查一条问题。
+
+        Args:
+            query: 原始或指代消解后的问题文本。
+
+        Returns:
+            首个组合规则或关键词命中产生的统一拦截结果；没有命中时返回
+            ``blocked=False`` 的空结果。组合规则优先于单关键词匹配。
+        """
         q = self._normalize_sensitive_text(query)
         tokenized_query = self._normalize_sensitive_token_text(query)
 
@@ -373,7 +407,15 @@ class InputPreprocessor:
         return PreprocessResult(blocked=False)
 
     def _check_sensitive_rules(self, normalized_query: str) -> Optional[tuple[str, str]]:
-        """组合规则匹配，覆盖动作+目标、人物、活动等非连续关键词表达。"""
+        """按配置顺序匹配需要多个条件共同出现的敏感规则。
+
+        Args:
+            normalized_query: 已移除分隔符并完成大小写、繁简统一的问题文本。
+
+        Returns:
+            首个命中的 ``(类别, 规则名)``；没有命中返回 ``None``。支持直接名单、
+            意图加名单、动作加目标、关键词加上下文四类规则，未知类型被忽略。
+        """
         for category, rules in self._sensitive_rules.items():
             for rule in rules:
                 rule_type = rule.get("type")
@@ -411,6 +453,15 @@ class InputPreprocessor:
 
     @staticmethod
     def _contains_any(normalized_text: str, words: List[str]) -> bool:
+        """判断规范化文本是否包含词表中的任一非空项。
+
+        Args:
+            normalized_text: 已完成敏感匹配归一化的文本。
+            words: 同样经过归一化的候选词列表。
+
+        Returns:
+            至少一个非空候选为子串时返回 ``True``，否则返回 ``False``。
+        """
         return any(word and word in normalized_text for word in words)
 
     @staticmethod
@@ -419,6 +470,16 @@ class InputPreprocessor:
         category: str,
         hit_type: str,
     ) -> PreprocessResult:
+        """记录不泄露完整输入的命中日志并构造统一拦截结果。
+
+        Args:
+            query: 被拦截的问题；日志最多包含前 80 个字符。
+            category: 命中的敏感分类，仅用于审计日志。
+            hit_type: 命中的规则名或 ``keyword``，仅用于审计日志。
+
+        Returns:
+            ``blocked=True``、使用通用用户提示且保留原问题的 ``PreprocessResult``。
+        """
         logger.warning(
             f"[预处理-拦截] 敏感词分类={category}, hit={hit_type}, "
             f"query='{query[:80]}...'"
@@ -431,6 +492,15 @@ class InputPreprocessor:
 
     @staticmethod
     def _normalize_sensitive_base(text: str) -> str:
+        """完成敏感匹配共享的 Unicode、大小写和繁简基础归一化。
+
+        Args:
+            text: 待规范化文本。
+
+        Returns:
+            两次 NFKC 和大小写折叠后的简体文本。繁简转换依次优先使用 OpenCC、
+            ``zhconv``，最后使用模块内置的有限字符映射；空输入返回空字符串。
+        """
         if not text:
             return ""
 
@@ -445,12 +515,14 @@ class InputPreprocessor:
 
     @classmethod
     def _normalize_sensitive_text(cls, text: str) -> str:
-        """
-        敏感词匹配专用归一化：
-        1. 大小写统一
-        2. 繁简转换
-        3. 全半角转换
-        4. 空格、标点、符号压缩
+        """生成适合中文和较长关键词连续子串匹配的紧凑文本。
+
+        Args:
+            text: 待规范化的输入或配置词。
+
+        Returns:
+            在基础归一化后移除空白及 Unicode 标点、符号、分隔、控制和组合标记
+            的字符串，从而抵抗使用空格或符号拆分关键词的规避方式。
         """
         normalized = cls._normalize_sensitive_base(text)
 
@@ -464,7 +536,15 @@ class InputPreprocessor:
 
     @classmethod
     def _normalize_sensitive_token_text(cls, text: str) -> str:
-        """保留词边界的归一化文本，供短英文和数字关键词使用。"""
+        """生成保留词边界的规范化文本，供短英文和数字关键词使用。
+
+        Args:
+            text: 待规范化的输入文本。
+
+        Returns:
+            把空白、标点、符号和分隔符折叠为单个空格，同时移除控制与组合标记
+            的文本；字母数字内容保持连续，便于正则边界判断。
+        """
         normalized = cls._normalize_sensitive_base(text)
         token_chars = []
         for ch in normalized:
@@ -483,7 +563,17 @@ class InputPreprocessor:
         normalized_query: str,
         tokenized_query: Optional[str] = None,
     ) -> bool:
-        """短英文/数字词使用边界匹配，降低包含匹配误伤。"""
+        """按关键词类型选择词边界或连续子串匹配。
+
+        Args:
+            keyword: 已规范化的敏感关键词。
+            normalized_query: 移除分隔符后的紧凑问题文本。
+            tokenized_query: 可选的保留词边界版本；未提供时回退紧凑文本。
+
+        Returns:
+            空关键词返回 ``False``；长度不超过二的纯 ASCII 字母数字词仅在完整
+            单词边界命中，其他关键词使用子串包含判断。
+        """
         if not keyword:
             return False
 
@@ -496,7 +586,15 @@ class InputPreprocessor:
     # ── Step 4: 业务相关性判断 ─────────────────────────────────────────
 
     async def _check_business_relevance(self, query: str) -> PreprocessResult:
-        """LLM 判断问题是否属于公司业务范围"""
+        """先用领域关键词快速放行，再由 LLM 判断问题是否明显无关。
+
+        Args:
+            query: 已通过敏感检查并完成指代消解的问题。
+
+        Returns:
+            LLM 明确返回 ``NOT_BUSINESS`` 时得到业务范围提示的拦截结果；命中
+            本地关键词、返回 ``BUSINESS``、输出非法或调用失败时均返回放行结果。
+        """
         normalized_query = self._normalize_sensitive_text(query)
         if any(
             keyword and keyword in normalized_query
@@ -543,7 +641,16 @@ class InputPreprocessor:
     async def _resolve_references(
         self, query: str, history_messages: List[dict]
     ) -> str:
-        """利用历史对话对当前问题进行指代消解和省略补全"""
+        """利用已清洗历史把当前问题改写成可独立理解的完整问题。
+
+        Args:
+            query: 当前用户问题。
+            history_messages: 按时间排序且只含合法角色/正文的历史消息。
+
+        Returns:
+            通过严格 JSON 解析和长度校验的 ``resolved_query``；没有有效历史、
+            LLM 调用失败或输出无效时返回原始 ``query``。
+        """
         history_lines = [
             f"{'用户' if message['role'] == 'user' else '助手'}：{message['content']}"
             for message in history_messages
@@ -579,7 +686,15 @@ class InputPreprocessor:
 
     @staticmethod
     def _parse_resolved_query(result: str) -> Optional[str]:
-        """严格解析指代消解 JSON，异常输出由调用方回退。"""
+        """严格校验指代消解模型输出，拒绝代码块和额外字段。
+
+        Args:
+            result: 模型原始输出，预期为仅含 ``resolved_query`` 的 JSON 对象。
+
+        Returns:
+            去除首尾空白且不超过 2000 字符的非空问题；类型、JSON、键集合或长度
+            任一不符合要求时返回 ``None``，不抛出解析错误。
+        """
         if not isinstance(result, str) or not result.strip():
             return None
         try:
@@ -599,8 +714,7 @@ class InputPreprocessor:
     # ── 敏感词加载辅助 ───────────────────────────────────────────────
 
     def _load_extra_sensitive_config(self, s) -> Dict[str, Any]:
-        """
-        从配置/文件中加载额外敏感配置。
+        """从设置指定的 UTF-8 JSON 文件读取额外敏感配置。
 
         兼容旧格式：
             {"political": [...], "illegal": [...]}
@@ -610,6 +724,13 @@ class InputPreprocessor:
               "lists": {"political_persons": [...], "political_activities": [...]},
               "rules": {"political": [...]}
             }
+
+        Args:
+            s: 具有 ``SENSITIVE_KEYWORDS_EXTRA_FILE`` 属性的设置对象。
+
+        Returns:
+            文件顶层为 JSON 对象时返回该字典；路径为空、读取/解析失败或顶层类型
+            错误时记录日志并返回空字典。
         """
         extra: Dict[str, Any] = {}
         file_path = s.SENSITIVE_KEYWORDS_EXTRA_FILE
@@ -628,7 +749,15 @@ class InputPreprocessor:
 
     @classmethod
     def _normalize_sensitive_lists(cls, lists: Any) -> Dict[str, List[str]]:
-        """归一化统一配置中的 lists。"""
+        """归一化统一配置中的全部命名敏感名单。
+
+        Args:
+            lists: “名单名到词表”的候选映射。
+
+        Returns:
+            名称转为字符串、词表经 :meth:`_normalize_word_list` 处理的新映射；
+            非字典输入被忽略并返回空映射。
+        """
         if not isinstance(lists, dict):
             if lists:
                 logger.warning("[预处理] 忽略无效敏感名单配置，期望 dict")
@@ -641,7 +770,16 @@ class InputPreprocessor:
 
     @classmethod
     def _normalize_sensitive_rules(cls, rules: Any) -> Dict[str, List[Dict[str, Any]]]:
-        """归一化统一配置中的 rules。"""
+        """复制组合规则并归一化其中参与直接匹配的内嵌词表。
+
+        Args:
+            rules: “分类到规则列表”的候选映射。
+
+        Returns:
+            新规则映射。仅保留字典规则，并规范化 ``actions``、``targets``、
+            ``keywords`` 和 ``contexts`` 字段；命名名单引用等其他字段原样复制。
+            非字典输入或非列表分类会被记录并忽略。
+        """
         if not isinstance(rules, dict):
             if rules:
                 logger.warning("[预处理] 忽略无效敏感规则配置，期望 dict")
@@ -681,7 +819,15 @@ class InputPreprocessor:
 
     @classmethod
     def _normalize_word_list(cls, words: Any) -> List[str]:
-        """归一化词表。"""
+        """把外部词表转换为有序、去重的敏感匹配形式。
+
+        Args:
+            words: 字符串、整数或浮点数组成的候选列表。
+
+        Returns:
+            按首次出现顺序保留的紧凑规范化词列表；非法项和规范化后空项被丢弃。
+            非列表输入记录警告（若为真值）并返回空列表。
+        """
         if not isinstance(words, list):
             if words:
                 logger.warning("[预处理] 忽略无效敏感名单配置，期望 list")

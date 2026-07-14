@@ -23,18 +23,24 @@ class PostProcessor:
     """
 
     def __init__(self, sensitive_words: Optional[List[str]] = None):
+        """配置需要按字面值额外屏蔽的敏感词。
+
+        Args:
+            sensitive_words: 自定义词表。传入 ``None`` 时使用模块默认词表；
+                传入空列表则明确禁用额外词表匹配。列表按引用保存，不会复制。
+        """
         self.sensitive_words = sensitive_words if sensitive_words is not None else DEFAULT_SENSITIVE_WORDS
 
     def process(self, text: str, sources: List[dict]) -> dict:
-        """
-        后处理 LLM 输出文本。
+        """依次对 LLM 输出执行脱敏、引用解析和 Markdown 空白整理。
 
-        返回:
-            {
-                "answer": str,           # 处理后的回答
-                "sources": list,         # 引用来源列表
-                "filtered_words": list,  # 被过滤的敏感词
-            }
+        Args:
+            text: 模型生成的原始回答文本。
+            sources: 与 ``[来源N]`` 编号顺序一致的重排文档列表。
+
+        Returns:
+            包含 ``answer``、``sources`` 和 ``filtered_words`` 的字典。
+            ``sources`` 仅含实际引用项；当模型未主动引用时，会追加完整参考来源列表。
         """
         filtered_words = []
 
@@ -54,7 +60,15 @@ class PostProcessor:
         }
 
     def _filter_sensitive(self, text: str) -> tuple[str, List[str]]:
-        """对常见凭证和个人数据值进行确定性脱敏。"""
+        """对常见凭证、个人数据值和配置词表执行确定性脱敏。
+
+        Args:
+            text: 待过滤的回答文本。
+
+        Returns:
+            二元组：替换后的文本，以及命中的规则标签或敏感词列表。
+            同一标签只按对应正则追加一次；自定义词按遍历顺序记录。
+        """
         filtered = []
         value_patterns = [
             (
@@ -97,7 +111,16 @@ class PostProcessor:
         return text, filtered
 
     def _process_citations(self, text: str, sources: List[dict]) -> tuple[str, List[dict]]:
-        """处理引用标注，将 [来源X] 关联到实际来源"""
+        """解析 ``[来源N]`` 标注并构建允许返回给浏览器的来源元数据。
+
+        Args:
+            text: 已脱敏但尚未整理格式的回答文本。
+            sources: 按提示中编号顺序排列的候选来源。
+
+        Returns:
+            处理后的文本和去重、按编号排序的引用来源列表。越界编号会被忽略；
+            若没有有效引用但存在候选来源，文本末尾会追加完整参考来源段落。
+        """
         cited = []
         cited_indices = set()
 
@@ -142,6 +165,14 @@ class PostProcessor:
 
     @staticmethod
     def _safe_source_url(value: str) -> str:
+        """仅保留具有网络位置的 HTTP(S) 来源链接。
+
+        Args:
+            value: 来源记录中的候选 URL；非字符串也会被安全拒绝。
+
+        Returns:
+            通过协议和主机校验的原始 URL，否则返回空字符串。
+        """
         if not isinstance(value, str):
             return ""
         parsed = urlparse(value)
@@ -149,7 +180,14 @@ class PostProcessor:
 
     @staticmethod
     def _format_text(text: str) -> str:
-        """格式整理"""
+        """规范化回答中的空行、行尾空白和 Markdown 标题间距。
+
+        Args:
+            text: 已完成脱敏和引用处理的回答文本。
+
+        Returns:
+            首尾无空白、连续空行不超过一行且标题前有空行的文本。
+        """
         # 清理连续空行（最多保留1个）
         text = re.sub(r'\n{3,}', '\n\n', text)
         # 清理行尾空白

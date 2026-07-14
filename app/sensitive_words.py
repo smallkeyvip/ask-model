@@ -149,6 +149,15 @@ _SENSITIVE_CORE: Dict[str, Any] = {
 
 
 def _as_word_list(value: Any) -> List[str]:
+    """把外部配置中的标量列表转换为可合并的字符串词表。
+
+    Args:
+        value: 候选列表；非列表值视为无配置。
+
+    Returns:
+        仅保留字符串、整数和浮点数中转为文本后非空的项，并保持输入顺序。
+        本方法不执行大小写、繁简或符号归一化。
+    """
     if not isinstance(value, list):
         return []
     return [
@@ -159,12 +168,20 @@ def _as_word_list(value: Any) -> List[str]:
 
 
 def get_default_sensitive_config() -> Dict[str, Any]:
-    """返回统一格式的默认敏感配置"""
+    """获取可由调用方安全修改的默认敏感配置。
+
+    Returns:
+        内置关键词、名单和组合规则的深拷贝，修改结果不会污染模块常量。
+    """
     return deepcopy(_SENSITIVE_CORE)
 
 
 def get_default_sensitive_words() -> Dict[str, List[str]]:
-    """返回默认分类关键词，兼容旧调用方"""
+    """获取旧调用方使用的分类关键词映射。
+
+    Returns:
+        内置 ``keywords`` 部分的深拷贝，不包含名单和组合规则。
+    """
     return deepcopy(_SENSITIVE_CORE["keywords"])
 
 
@@ -172,10 +189,14 @@ def merge_sensitive_words(
     base: Dict[str, List[str]],
     additions: Dict[str, List[str]],
 ) -> Dict[str, List[str]]:
-    """
-    合并外部追加的敏感词。
+    """按分类合并旧格式敏感词并去重排序。
 
-    additions 格式同 _SENSITIVE_CORE，新词追加到对应分类。
+    Args:
+        base: 基础的“分类到词表”映射。
+        additions: 需要追加的同格式映射；可包含基础映射中不存在的分类。
+
+    Returns:
+        新建的合并映射。每类词表为两个输入集合的字典序排序并集，输入不会被修改。
     """
     result = {}
     for category in set(list(base.keys()) + list(additions.keys())):
@@ -189,8 +210,7 @@ def merge_sensitive_config(
     base: Dict[str, Any],
     additions: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    合并统一格式敏感配置。
+    """把新旧两种外部格式合并到统一敏感配置的深拷贝中。
 
     兼容旧外部 JSON：
         {"political": [...], "illegal": [...]}
@@ -200,6 +220,14 @@ def merge_sensitive_config(
           "lists": {"political_persons": [...], "political_activities": [...]},
           "rules": {"political": [...]}
         }
+
+    Args:
+        base: 包含 ``keywords``、``lists`` 和 ``rules`` 的基础配置。
+        additions: 外部追加配置；非映射子项会被忽略。
+
+    Returns:
+        合并后的新配置。关键词和名单去重排序；合法规则字典按原顺序追加。
+        ``base`` 与 ``additions`` 均不会被修改。
     """
     result = deepcopy(base)
 

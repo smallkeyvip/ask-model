@@ -39,6 +39,12 @@ class QueryRewriter:
     """
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
+        """初始化查询改写器。
+
+        Args:
+            llm_client: 可复用的 LLM 客户端；未提供时创建专用客户端。
+                调用方负责在适当时机关闭传入或新建客户端的网络资源。
+        """
         self._llm = llm_client or LLMClient()
 
     async def rewrite(
@@ -47,9 +53,21 @@ class QueryRewriter:
         history_messages: List[dict],
         mid_term_summary: str = "",
     ) -> List[str]:
-        """
-        返回 1~3 条改写后的检索查询。
-        如果 LLM 调用失败，降级返回 [原始query]。
+        """结合最近对话和中期摘要生成一至三条检索查询。
+
+        Args:
+            query: 当前用户问题，也是任何降级路径使用的原始查询。
+            history_messages: 按时间排序的对话消息；最多读取末尾六条，
+                每项应包含 ``role`` 和 ``content``。
+            mid_term_summary: 可选的较早对话摘要。
+
+        Returns:
+            去除空项并截断至每项 100 字符的查询列表，最多三项。LLM 调用、
+            解析失败或输出为空时返回仅含原始 ``query`` 的列表。
+
+        Raises:
+            KeyError: 历史消息结构缺少 ``role`` 或 ``content``；该错误发生在
+                LLM 降级保护之前，表示调用方传入了无效的内部消息结构。
         """
         # 构建 LLM 输入
         context_parts = []
@@ -77,6 +95,18 @@ class QueryRewriter:
             return [query]
 
     async def _call_llm(self, user_msg: str) -> str:
+        """使用固定少样本提示请求底层 LLM 完成查询改写。
+
+        Args:
+            user_msg: 已拼接历史摘要、最近对话和当前问题的用户消息。
+
+        Returns:
+            模型返回的原始文本，预期以 ``|||`` 分隔多个查询。
+
+        Raises:
+            Exception: 底层 LLM 的网络、HTTP 或响应解析错误；由
+                :meth:`rewrite` 捕获并转换为原始查询降级结果。
+        """
         return await self._llm.chat(
             messages=[
                 {"role": "system", "content": REWRITE_SYSTEM_PROMPT},

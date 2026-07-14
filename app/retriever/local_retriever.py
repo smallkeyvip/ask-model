@@ -23,6 +23,11 @@ class LocalRetriever:
     """
 
     def __init__(self):
+        """打开本地持久化 Chroma collection，并延迟准备嵌入模型。
+
+        构造使用全局持久化目录、collection 名和余弦距离配置；只查询当前文档数
+        用于日志，不会在此时加载或下载 Embedding 模型。
+        """
         s = settings()
         self._client = chromadb.PersistentClient(
             path=s.CHROMA_PERSIST_DIR,
@@ -39,7 +44,18 @@ class LocalRetriever:
         )
 
     def _get_embedding_fn(self):
-        """延迟加载 Embedding 模型（首次调用时下载/加载）"""
+        """获取进程内复用的 Hugging Face Embedding 实例。
+
+        Returns:
+            已配置 CPU、向量归一化和本地文件策略的 ``HuggingFaceEmbeddings``。
+
+        Raises:
+            ImportError: 未安装嵌入依赖。
+            Exception: 首次加载时模型目录无效，或禁止联网且本地模型不存在。
+
+        Notes:
+            首次调用可能下载模型；后续调用返回缓存实例。本方法未提供并发初始化锁。
+        """
         if self._embedding_fn is None:
             from langchain_huggingface import HuggingFaceEmbeddings
             s = settings()
@@ -63,7 +79,19 @@ class LocalRetriever:
         ids: Optional[List[str]] = None,
         metadatas: Optional[List[dict]] = None,
     ) -> int:
-        """将文档批量写入本地向量库"""
+        """生成文档向量并批量写入本地知识 collection。
+
+        Args:
+            documents: 待入库的正文列表。
+            ids: 可选的稳定文档 ID；未提供时为每条正文生成 UUID。
+            metadatas: 可选的逐文档元数据；未提供时写入对应数量的空字典。
+
+        Returns:
+            成功提交给 Chroma 的文档数量；输入为空时返回 0 且不加载模型。
+
+        Raises:
+            Exception: ID/元数据数量与正文不匹配、嵌入失败或 Chroma 写入失败。
+        """
         import uuid
         if not documents:
             return 0
@@ -82,7 +110,18 @@ class LocalRetriever:
 
     # ── 语义检索 ─────────────────────────────────────────────────────
     def search(self, query: str, top_k: int = 10) -> List[dict]:
-        """语义检索，返回最相关的 top_k 条文档"""
+        """对单条查询执行本地向量检索。
+
+        Args:
+            query: 需要编码并检索的文本。
+            top_k: 最大返回数量，实际值不会超过 collection 文档数。
+
+        Returns:
+            按 Chroma 相关性顺序排列的统一文档字典列表；空库直接返回空列表。
+
+        Raises:
+            Exception: 模型加载、查询编码或 Chroma 查询失败。
+        """
         if self._collection.count() == 0:
             return []
 
@@ -96,7 +135,19 @@ class LocalRetriever:
         return self._format_results(results)
 
     def search_multi(self, queries: List[str], top_k: int = 10) -> List[dict]:
-        """多 query 检索并去重合并"""
+        """批量检索多条改写查询，并按正文前缀去重合并最佳结果。
+
+        Args:
+            queries: 需要同时编码的查询列表。
+            top_k: 每条查询和最终合并结果的最大数量。
+
+        Returns:
+            按相似度降序排列、最多 ``top_k`` 条的文档列表。正文前 100 个字符
+            相同的命中只保留分数最高者；查询为空或库为空时返回空列表。
+
+        Raises:
+            Exception: 模型加载、批量编码或 Chroma 查询失败。
+        """
         if not queries or self._collection.count() == 0:
             return []
         embed_fn = self._get_embedding_fn()
@@ -122,6 +173,16 @@ class LocalRetriever:
 
     @staticmethod
     def _format_results(results, query_index: int = 0) -> List[dict]:
+        """把 Chroma 指定查询的嵌套响应转换为统一检索结果。
+
+        Args:
+            results: Chroma ``query`` 返回的批量响应。
+            query_index: 需要提取的查询结果下标。
+
+        Returns:
+            含 ``content``、``source``、``score``、``metadata`` 和 ``origin``
+            的列表。空响应或下标越界时返回空列表；余弦距离转换为不小于零的相似度。
+        """
         formatted = []
         if not results or not results["documents"]:
             return formatted
@@ -141,4 +202,5 @@ class LocalRetriever:
 
     @property
     def count(self) -> int:
+        """查询并返回本地知识 collection 的当前文档总数。"""
         return self._collection.count()

@@ -26,12 +26,20 @@ class HybridRetriever:
     """
 
     def __init__(self):
+        """创建远程百炼检索器和本地 Chroma 检索器。"""
         self.bailian = BailianRetriever()
         self.local = LocalRetriever()
 
     async def retrieve(self, queries: List[str], top_k: int = 10) -> List[dict]:
-        """
-        多路召回：对每个 query 并发请求远程+本地，合并去重后返回 top_k。
+        """并发执行每条查询的远程召回和一次本地批量召回，再融合排序。
+
+        Args:
+            queries: 查询改写器生成的一至多条检索文本。
+            top_k: 融合后最多返回的文档数量。
+
+        Returns:
+            内容去重、RRF 归一化评分且尽量覆盖可用来源的文档列表。任一路异常
+            都会被单独记录并忽略；所有路均无结果时返回空列表。
         """
         remote_tasks = [asyncio.create_task(self.bailian.retrieve(q)) for q in queries]
         local_task = asyncio.create_task(
@@ -69,15 +77,38 @@ class HybridRetriever:
         return final
 
     async def aclose(self) -> None:
+        """关闭混合检索器持有的异步远程连接池。
+
+        本地 Chroma 客户端为同步持久化对象，没有对应的异步关闭操作。
+        """
         await self.bailian.aclose()
 
     @staticmethod
     def _content_key(result: dict) -> str:
+        """为正文生成不暴露内容的稳定去重键。
+
+        Args:
+            result: 包含可选 ``content`` 字段的检索结果。
+
+        Returns:
+            正文经过空白压缩、首尾清理和大小写折叠后的 SHA-256 十六进制摘要；
+            正文为空时返回空字符串并由融合逻辑丢弃该项。
+        """
         content = re.sub(r"\s+", " ", result.get("content", "")).strip().casefold()
         return hashlib.sha256(content.encode("utf-8")).hexdigest() if content else ""
 
     @classmethod
     def _reciprocal_rank_fusion(cls, ranked_lists: List[List[dict]]) -> List[dict]:
+        """按内容去重并对多个排序列表应用倒数排名融合。
+
+        Args:
+            ranked_lists: 各检索路径按相关性降序排列的结果列表。
+
+        Returns:
+            按融合分降序排列的新字典列表。相同正文的各路贡献按
+            ``1 / (60 + rank)`` 累加，最高融合分归一化为 1；原始 ``score``
+            保存为 ``retrieval_score``。没有有效正文时返回空列表。
+        """
         by_key: dict[str, dict] = {}
         scores: dict[str, float] = {}
         for ranked in ranked_lists:
@@ -101,6 +132,16 @@ class HybridRetriever:
 
     @staticmethod
     def _ensure_source_coverage(fused: List[dict], top_k: int) -> List[dict]:
+        """在数量限制内尽量让最终结果包含每种已召回来源。
+
+        Args:
+            fused: 已按融合分降序排列的文档列表。
+            top_k: 最终结果数量上限。
+
+        Returns:
+            初始前 ``top_k`` 条的浅列表。若某来源未入选，则追加到空余位置，
+            或用该来源排名最高的文档替换当前末项；``top_k`` 小于等于零时返回空列表。
+        """
         selected = fused[:top_k]
         available_origins = {item.get("origin") for item in fused}
         selected_origins = {item.get("origin") for item in selected}

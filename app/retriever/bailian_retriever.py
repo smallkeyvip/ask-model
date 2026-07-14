@@ -23,6 +23,11 @@ class BailianRetriever:
     """
 
     def __init__(self):
+        """从全局配置创建百炼端点凭据和可复用异步 HTTP 客户端。
+
+        客户端默认超时 30 秒并信任环境代理设置；原始 API 密钥只用于请求头，
+        不会写入检索结果。
+        """
         s = settings()
         self.api_url = s.BAILIAN_API_URL
         self.api_key = s.BAILIAN_API_KEY
@@ -30,13 +35,24 @@ class BailianRetriever:
         self._client = httpx.AsyncClient(timeout=30, trust_env=True)
 
     async def aclose(self) -> None:
+        """关闭百炼 HTTP 连接池；已经关闭时不执行操作。"""
         if not self._client.is_closed:
             await self._client.aclose()
 
     async def retrieve(self, query: str) -> List[dict]:
-        """
-        调用百炼知识库，返回检索结果。
-        百炼 API 强制要求 stream=True，这里用流式接收后聚合。
+        """通过百炼强制流式接口聚合一次知识库检索结果。
+
+        Args:
+            query: 发送给百炼应用的单条检索问题。
+
+        Returns:
+            从全部 SSE 事件解析出的统一文档列表。服务端错误或网络异常会在
+            250 毫秒后重试一次；第二次仍失败、非成功客户端状态或无可解析事件时
+            返回空列表，不向混合检索器抛出错误。
+
+        Notes:
+            格式错误的单个 SSE ``data`` 行会被忽略；HTTP 5xx 会触发重试，
+            其他非 200 状态记录响应正文并直接降级。
         """
         payload = {
             "input": {
@@ -95,7 +111,17 @@ class BailianRetriever:
         return []
 
     async def retrieve_stream(self, query: str) -> AsyncGenerator[str, None]:
-        """流式调用百炼知识库，逐步返回内容"""
+        """把百炼 SSE 的原始 JSON 数据块逐项转发给调用方。
+
+        Args:
+            query: 发送给百炼应用的单条问题。
+
+        Yields:
+            去除 ``data:`` 前缀和首尾空白的原始字符串，不包含 ``[DONE]``。
+
+        Notes:
+            HTTP、网络和读取错误只记录日志并结束生成器，不会再次抛出或重试。
+        """
         payload = {
             "input": {
                 "messages": [{"role": "user", "content": query}]
@@ -129,9 +155,15 @@ class BailianRetriever:
 
     @staticmethod
     def _parse_response(events: list) -> List[dict]:
-        """
-        解析百炼 API SSE 事件流，提取知识库检索结果。
-        events: 所有 SSE data 行解析后的 JSON 列表
+        """从已解码的百炼 SSE 事件中提取工具角色知识文档。
+
+        Args:
+            events: 每个 SSE ``data`` 行 JSON 解码后的字典列表。
+
+        Returns:
+            统一检索结果列表。工具消息含 ``docs`` 时逐项保留正文、来源、分数和
+            链接；没有 ``docs`` 时把工具消息正文作为分数 0.7 的兜底文档。
+            无效分数使用 0.8，非工具角色被忽略。
         """
         results = []
 
