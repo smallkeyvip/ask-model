@@ -65,17 +65,6 @@ class ShortTermMemory:
         return [{"role": t.role, "content": t.content} for t in self.get_window()]
 
     # ── 溢出检测 ─────────────────────────────────────────────────────
-    def overflowed_turns(self) -> List[Turn]:
-        """读取超出当前窗口容量的最旧消息，但不修改历史。
-
-        Returns:
-            超出部分的新列表；未溢出时返回空列表。列表中的 ``Turn`` 仍是内部对象。
-        """
-        max_msgs = self.window_size * 2
-        if len(self._history) <= max_msgs:
-            return []
-        return self._history[:-max_msgs]
-
     def trim_to_window(self) -> List[Turn]:
         """删除超出窗口容量的最旧消息并返回被删部分。
 

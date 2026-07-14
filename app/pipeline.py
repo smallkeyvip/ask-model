@@ -17,6 +17,7 @@ from app.reranker import Reranker
 from app.prompt_builder import PromptBuilder
 from app.llm import LLMClient
 from app.postprocessor import PostProcessor
+from app.sensitive_words import get_default_sensitive_config
 
 logger = logging.getLogger(__name__)
 settings = get_settings
@@ -47,6 +48,9 @@ class RAGPipeline:
             Exception: 配置缺失、Chroma 初始化或检索组件构造失败。
         """
         s = settings()
+        sensitive_config = get_default_sensitive_config(
+            s.SENSITIVE_KEYWORDS_EXTRA_FILE
+        )
         self.llm = LLMClient()
         self.rewriter = QueryRewriter(llm_client=self.llm)
         self.retriever = HybridRetriever()
@@ -56,9 +60,11 @@ class RAGPipeline:
             llm_client=self.llm,
         )
         self.prompt_builder = PromptBuilder()
-        self.postprocessor = PostProcessor()
+        self.postprocessor = PostProcessor(
+            sensitive_words=sensitive_config["output_sensitive_words"]
+        )
         self.preprocessor = InputPreprocessor(
-            business_keywords=s.BUSINESS_DOMAIN_KEYWORDS or None,
+            sensitive_config=sensitive_config,
             llm_client=self.llm,
         )
 

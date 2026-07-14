@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import asyncio
-from typing import AsyncGenerator, List
+from typing import List
 
 import httpx
 
@@ -19,7 +19,7 @@ settings = get_settings
 class BailianRetriever:
     """
     调用阿里百炼知识库 API 进行远程检索。
-    支持普通响应和 SSE 流式响应两种模式。
+    通过 SSE 接口聚合知识库检索结果。
     """
 
     def __init__(self):
@@ -109,49 +109,6 @@ class BailianRetriever:
                     continue
                 logger.error(f"[百炼检索] 请求失败: {e}")
         return []
-
-    async def retrieve_stream(self, query: str) -> AsyncGenerator[str, None]:
-        """把百炼 SSE 的原始 JSON 数据块逐项转发给调用方。
-
-        Args:
-            query: 发送给百炼应用的单条问题。
-
-        Yields:
-            去除 ``data:`` 前缀和首尾空白的原始字符串，不包含 ``[DONE]``。
-
-        Notes:
-            HTTP、网络和读取错误只记录日志并结束生成器，不会再次抛出或重试。
-        """
-        payload = {
-            "input": {
-                "messages": [{"role": "user", "content": query}]
-            },
-            "parameters": {
-                "agent_options": {"agent_id": self.agent_id}
-            },
-            "stream": True,
-        }
-
-        try:
-            async with self._client.stream(
-                    "POST",
-                    self.api_url,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                    timeout=60,
-                ) as resp:
-                    resp.raise_for_status()
-                    async for line in resp.aiter_lines():
-                        if line.startswith("data:"):
-                            chunk = line[5:].strip()
-                            if chunk == "[DONE]":
-                                break
-                            yield chunk
-        except Exception as e:
-            logger.error(f"[百炼检索-流式] 请求失败: {e}")
 
     @staticmethod
     def _parse_response(events: list) -> List[dict]:

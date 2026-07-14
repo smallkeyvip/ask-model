@@ -54,34 +54,6 @@ class MemoryManager:
         self._turn_counter = 0
 
     # ── 记录一轮问答 ─────────────────────────────────────────────────
-    def record_user(self, query: str) -> None:
-        """仅把用户问题追加到短期记忆。
-
-        Args:
-            query: 已完成预处理的用户问题。
-
-        Notes:
-            本方法不增加完整轮次计数，也不触发窗口裁剪，适用于分步记录流程。
-        """
-        self.short_term.add("user", query)
-
-    async def record_assistant(self, answer: str, sources: Optional[List[dict]] = None) -> None:
-        """记录助手回复，并处理由这条回复触发的短期窗口溢出。
-
-        Args:
-            answer: 已后处理、最终展示给用户的回答。
-            sources: 可选的引用来源，保存在该条消息的元数据中。
-
-        Raises:
-            Exception: 长期记忆写入失败。中期摘要自身的 LLM 失败会被其组件降级为
-                ``None``，不会由本方法抛出。
-        """
-        self.short_term.add("assistant", answer, sources=sources or [])
-        self._turn_counter += 1
-
-        # 异步执行：溢出压缩 + 长期记忆提取（不阻塞响应）
-        await self._handle_overflow()
-
     async def record_exchange(
         self,
         query: str,

@@ -64,43 +64,6 @@ class LongTermMemory:
         )
 
     # ── 写入 ─────────────────────────────────────────────────────────
-    def store(
-        self,
-        content: str,
-        category: str = "general",
-        session_id: str = "",
-        entities: Optional[List[str]] = None,
-    ) -> str:
-        """向当前用户的长期记忆写入一条带元数据的记录。
-
-        Args:
-            content: 记忆正文，例如关键结论、实体描述或主题摘要。
-            category: 类别标签，例如 ``entity``、``topic`` 或 ``conclusion``。
-            session_id: 所属会话；为空时使用构造时绑定的默认会话。
-            entities: 关联实体列表，以逗号连接后写入 Chroma 元数据。
-
-        Returns:
-            为本条记录生成的 UUID 字符串。
-
-        Raises:
-            Exception: Chroma 持久化或嵌入计算失败。
-        """
-        doc_id = str(uuid.uuid4())
-        metadata = {
-            "category": category,
-            "user_id": self.user_id,
-            "session_id": session_id or self.session_id,
-            "entities": ",".join(entities or []),
-            "timestamp": time.time(),
-        }
-        self._collection.add(
-            ids=[doc_id],
-            documents=[content],
-            metadatas=[metadata],
-        )
-        logger.debug(f"[长期记忆] 存入记录 {doc_id}，category={category}")
-        return doc_id
-
     def store_batch(
         self,
         items: List[dict],
@@ -157,35 +120,6 @@ class LongTermMemory:
             query_texts=[query],
             n_results=min(k, owner_count),
             where=self._owner_filter(),
-        )
-        return self._format_results(results)
-
-    def recall_with_filter(
-        self, query: str, category: str, top_k: Optional[int] = None
-    ) -> List[dict]:
-        """在当前用户和指定类别的交集内执行语义召回。
-
-        Args:
-            query: 用于向量查询的当前问题。
-            category: 必须匹配的记忆类别元数据。
-            top_k: 本次最大返回数量；未提供或为零时使用实例默认值。
-
-        Returns:
-            含正文、元数据和距离的结果列表；当前用户无任何记录时返回空列表。
-        """
-        k = top_k or self.top_k
-        owner_count = self.count
-        if owner_count == 0:
-            return []
-        results = self._collection.query(
-            query_texts=[query],
-            n_results=min(k, owner_count),
-            where={
-                "$and": [
-                    self._owner_filter(),
-                    {"category": category},
-                ]
-            },
         )
         return self._format_results(results)
 
@@ -253,7 +187,3 @@ class LongTermMemory:
             include=["metadatas"],
         )
         return len(records.get("ids", []))
-
-    def clear(self) -> None:
-        """删除当前用户的全部长期记忆，不限制会话且不影响其他成员。"""
-        self._collection.delete(where=self._owner_filter())

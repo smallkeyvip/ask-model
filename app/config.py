@@ -47,8 +47,8 @@ class Settings(BaseSettings):
 
     # ── 输入预处理 ────────────────────────────────────────────────────
     ENABLE_INPUT_PREPROCESS: bool = True    # 是否启用输入预处理（敏感词+业务判断+指代消解）
+    # 敏感词、组合规则、业务关键词与输出脱敏词的统一配置
     SENSITIVE_KEYWORDS_EXTRA_FILE: str = "./sensitive_words_extra.json"
-    BUSINESS_DOMAIN_KEYWORDS: str = ""      # 业务领域关键词（逗号分隔，留空使用内置默认）
 
     # ── 认证与授权 ─────────────────────────────────────────────────────
     AUTH_DB_PATH: str = "./data/auth.db"

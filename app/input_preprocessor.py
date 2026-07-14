@@ -12,15 +12,13 @@ import json
 import logging
 import re
 import unicodedata
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from app.config import get_settings
 from app.llm import LLMClient
-from app.sensitive_words import (
-    get_default_sensitive_config,
-    merge_sensitive_config,
-)
+from app.sensitive_words import get_default_sensitive_config
 
 try:
     from opencc import OpenCC
@@ -153,16 +151,6 @@ REFERENCE_RESOLVE_EXAMPLES = [
     },
 ]
 
-# ── 默认业务领域关键词 ──────────────────────────────────────────────
-
-_DEFAULT_BUSINESS_KEYWORDS = (
-    "怪兽充电,充电宝,供应链,供应链资产,退赔,赔偿,返修,报废,"
-    "渠道商,商户,门店,BD,SN,设备,资产,PCN,SPU,SKU,"
-    "返还单,赔付,维修,物流,入库,出库,到货登记,"
-    "阿里百炼,eboss,PMS,NPS,ASQ,ACQ,FMS,"
-    "退赔明细,赔偿申请,退赔申请,退赔统计"
-)
-
 _MAX_QUERY_CHARS = 2000
 _MAX_HISTORY_MESSAGES = 6
 _MAX_HISTORY_CONTENT_CHARS = 4000
@@ -197,28 +185,28 @@ class InputPreprocessor:
 
     def __init__(
         self,
-        business_keywords: Optional[str] = None,
+        sensitive_config: Optional[Dict[str, Any]] = None,
         llm_client: Optional[LLMClient] = None,
     ):
         """加载敏感规则与业务词表，并准备输入判断使用的 LLM 客户端。
 
         Args:
-            business_keywords: 可选的逗号分隔业务关键词；为空时使用内置领域词表。
+            sensitive_config: 可选的已加载统一配置；未提供时从全局设置指定的文件加载。
             llm_client: 可选的共享 LLM 客户端；未提供时创建并由本实例负责关闭。
 
         Notes:
-            构造会合并外部敏感配置，对关键词、名单和组合规则做统一归一化，
-            并建立“规范化关键词到类别”的快速查找表。外部配置读取失败只记录日志。
+            构造会对配置中的关键词、名单和组合规则做统一归一化，并建立
+            “规范化关键词到类别”的快速查找表。文件缺失或结构无效时直接报错。
         """
         s = settings()
         self._llm = llm_client or LLMClient()
         self._owns_llm = llm_client is None
 
-        # ── 敏感词库 ──
-        extra_config = self._load_extra_sensitive_config(s)
-        self._sensitive_config = merge_sensitive_config(
-            get_default_sensitive_config(),
-            extra_config,
+        # ── 敏感词库与业务关键词：统一来自同一配置文件 ──
+        self._sensitive_config = deepcopy(
+            sensitive_config
+            if sensitive_config is not None
+            else get_default_sensitive_config(s.SENSITIVE_KEYWORDS_EXTRA_FILE)
         )
         self._sensitive: Dict[str, List[str]] = self._sensitive_config["keywords"]
         # 构建快速查找集合（大小写、繁简、全半角、空格/符号归一化）
@@ -241,11 +229,11 @@ class InputPreprocessor:
             f"分类: {list(self._sensitive.keys())}"
         )
 
-        # ── 业务关键词 ──
-        self._business_keywords = business_keywords or _DEFAULT_BUSINESS_KEYWORDS
+        business_keywords: List[str] = self._sensitive_config["business_keywords"]
+        self._business_keywords = ",".join(business_keywords)
         self._business_keyword_list = [
             self._normalize_sensitive_text(keyword)
-            for keyword in self._business_keywords.split(",")
+            for keyword in business_keywords
             if keyword.strip()
         ]
         logger.info(f"[预处理] 业务关键词: {self._business_keywords[:100]}...")
@@ -710,42 +698,6 @@ class InputPreprocessor:
         if not resolved or len(resolved) > _MAX_QUERY_CHARS:
             return None
         return resolved
-
-    # ── 敏感词加载辅助 ───────────────────────────────────────────────
-
-    def _load_extra_sensitive_config(self, s) -> Dict[str, Any]:
-        """从设置指定的 UTF-8 JSON 文件读取额外敏感配置。
-
-        兼容旧格式：
-            {"political": [...], "illegal": [...]}
-        统一格式：
-            {
-              "keywords": {"political": [...]},
-              "lists": {"political_persons": [...], "political_activities": [...]},
-              "rules": {"political": [...]}
-            }
-
-        Args:
-            s: 具有 ``SENSITIVE_KEYWORDS_EXTRA_FILE`` 属性的设置对象。
-
-        Returns:
-            文件顶层为 JSON 对象时返回该字典；路径为空、读取/解析失败或顶层类型
-            错误时记录日志并返回空字典。
-        """
-        extra: Dict[str, Any] = {}
-        file_path = s.SENSITIVE_KEYWORDS_EXTRA_FILE
-        if file_path:
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    extra = data
-                    logger.info(f"[预处理] 从文件加载额外敏感配置: {file_path}")
-                else:
-                    logger.error("[预处理] 额外敏感配置必须是 JSON object")
-            except Exception as e:
-                logger.error(f"[预处理] 加载额外敏感配置文件失败: {e}")
-        return extra
 
     @classmethod
     def _normalize_sensitive_lists(cls, lists: Any) -> Dict[str, List[str]]:

@@ -8,10 +8,9 @@ import re
 from typing import List, Optional
 from urllib.parse import urlparse
 
-logger = logging.getLogger(__name__)
+from app.sensitive_words import get_default_sensitive_config
 
-# 默认敏感词列表（生产环境应从配置/数据库加载）
-DEFAULT_SENSITIVE_WORDS: List[str] = []
+logger = logging.getLogger(__name__)
 
 
 class PostProcessor:
@@ -26,10 +25,14 @@ class PostProcessor:
         """配置需要按字面值额外屏蔽的敏感词。
 
         Args:
-            sensitive_words: 自定义词表。传入 ``None`` 时使用模块默认词表；
-                传入空列表则明确禁用额外词表匹配。列表按引用保存，不会复制。
+            sensitive_words: 自定义输出脱敏词表。传入 ``None`` 时从统一配置文件的
+                ``output_sensitive_words`` 字段加载；传入空列表则明确禁用额外匹配。
         """
-        self.sensitive_words = sensitive_words if sensitive_words is not None else DEFAULT_SENSITIVE_WORDS
+        if sensitive_words is None:
+            sensitive_words = get_default_sensitive_config()[
+                "output_sensitive_words"
+            ]
+        self.sensitive_words = list(sensitive_words)
 
     def process(self, text: str, sources: List[dict]) -> dict:
         """依次对 LLM 输出执行脱敏、引用解析和 Markdown 空白整理。

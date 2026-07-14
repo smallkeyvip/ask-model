@@ -176,10 +176,11 @@ ask-model/
 | `DOCUMENT_CHUNK_SIZE` | `1200` | 文档分块字符数 |
 | `DOCUMENT_CHUNK_OVERLAP` | `150` | 相邻分块重叠字符数 |
 | `ENABLE_INPUT_PREPROCESS` | `true` | 启用敏感词、业务判断和指代消解 |
-| `SENSITIVE_KEYWORDS_EXTRA_FILE` | `./sensitive_words_extra.json` | 扩展敏感规则文件 |
-| `BUSINESS_DOMAIN_KEYWORDS` | 空 | 逗号分隔的业务关键词 |
+| `SENSITIVE_KEYWORDS_EXTRA_FILE` | `./sensitive_words_extra.json` | 敏感词、规则、业务关键词与输出脱敏词的统一配置文件 |
 
 `DOCUMENT_CHUNK_OVERLAP` 必须小于 `DOCUMENT_CHUNK_SIZE`。
+敏感词配置文件必须包含 `keywords`、`lists`、`rules`、`business_keywords` 和
+`output_sensitive_words`；文件缺失或结构无效时服务会拒绝启动，避免静默关闭过滤。
 
 ### 服务
 
