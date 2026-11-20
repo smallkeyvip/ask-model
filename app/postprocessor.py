@@ -73,6 +73,8 @@ class PostProcessor:
             同一标签只按对应正则追加一次；自定义词按遍历顺序记录。
         """
         filtered = []
+        # 左边界须排除字母和连字符：单据编号是「字母前缀+长数字」形态（如 YYBX+19 位雪花 ID），
+        # 只挡前导数字会把整串单号当银行卡/身份证打码，回显给用户的单号就失效了。
         value_patterns = [
             (
                 "credential",
@@ -83,17 +85,17 @@ class PostProcessor:
             ),
             (
                 "phone",
-                re.compile(r"(?<!\d)(1[3-9]\d)\d{4}(\d{4})(?!\d)"),
+                re.compile(r"(?<![0-9A-Za-z-])(1[3-9]\d)\d{4}(\d{4})(?!\d)"),
                 lambda match: f"{match.group(1)}****{match.group(2)}",
             ),
             (
                 "id_number",
-                re.compile(r"(?<!\d)(\d{6})\d{8}([\dXx]{4})(?!\d)"),
+                re.compile(r"(?<![0-9A-Za-z-])(\d{6})\d{8}([\dXx]{4})(?!\d)"),
                 lambda match: f"{match.group(1)}********{match.group(2)}",
             ),
             (
                 "bank_card",
-                re.compile(r"(?<!\d)(\d{4})\d{8,11}(\d{4})(?!\d)"),
+                re.compile(r"(?<![0-9A-Za-z-])(\d{4})\d{8,11}(\d{4})(?!\d)"),
                 lambda match: f"{match.group(1)}********{match.group(2)}",
             ),
         ]
